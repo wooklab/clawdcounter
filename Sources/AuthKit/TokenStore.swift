@@ -38,6 +38,7 @@ public final class InMemoryTokenStore: TokenStore, @unchecked Sendable {
 }
 
 /// 앱 전용 키체인 저장소 (Claude Code 항목과 무관한 별도 service).
+// TODO(리뷰 #7): kSecUseDataProtectionKeychain(데이터 프로텍션 키체인) 사용 검토.
 public struct KeychainTokenStore: TokenStore {
     public let service: String
     public let account: String

@@ -14,24 +14,32 @@ final class OAuthCallbackServer: @unchecked Sendable {
     private let expectedState: String
     private let callbackPath: String
     private let successURL: URL
+    private let connectionTimeout: TimeInterval
     private var listener: NWListener?
+    /// 요청을 읽는 중인 연결. 응답 전송 중이거나 콜백으로 넘긴 연결은 빠지며 전송 완료 시 스스로 닫힌다.
+    private var connections: [ObjectIdentifier: NWConnection] = [:]
 
     private var startContinuation: CheckedContinuation<UInt16, Error>?
     private var waitContinuation: CheckedContinuation<Callback, Error>?
     private var pendingResult: Result<Callback, Error>?
     private var finished = false
 
-    init(expectedState: String, callbackPath: String = "/callback", successURL: URL) {
+    init(expectedState: String, callbackPath: String = "/callback", successURL: URL, connectionTimeout: TimeInterval = 10) {
         self.expectedState = expectedState
         self.callbackPath = callbackPath
         self.successURL = successURL
+        self.connectionTimeout = connectionTimeout
     }
+
+    /// 테스트용: 추적 중인 연결 수.
+    var openConnectionCount: Int { queue.sync { connections.count } }
 
     /// 리스너를 시작하고 바인딩된 포트를 반환한다.
     func start() async throws -> UInt16 {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<UInt16, Error>) in
             queue.async { [self] in
                 let params = NWParameters.tcp
+                // TODO(리뷰 #5): IPv6(::1) 바인딩 — redirect가 localhost라 브라우저가 ::1을 먼저 시도하면 실패할 수 있음.
                 params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
                 let listener: NWListener
                 do { listener = try NWListener(using: params) } catch {
@@ -72,9 +80,12 @@ final class OAuthCallbackServer: @unchecked Sendable {
         }
     }
 
-    /// 리스너를 닫는다(대기 중이면 취소로 종료). 이미 받은 연결의 응답은 영향 없음.
+    /// 리스너와 추적 중인 연결을 닫는다(대기 중이면 취소로 종료). 콜백으로 넘긴 연결의 응답은 영향 없음.
     func stop() {
-        queue.async { [weak self] in self?.finish(.failure(AuthError.cancelled)) }
+        queue.async { [weak self] in
+            self?.finish(.failure(AuthError.cancelled))
+            self?.cancelConnections()
+        }
     }
 
     // MARK: - queue 내부
@@ -102,6 +113,7 @@ final class OAuthCallbackServer: @unchecked Sendable {
         finished = true
         listener?.cancel()
         listener = nil
+        cancelConnections()
         if let cont = waitContinuation {
             waitContinuation = nil
             cont.resume(with: result)
@@ -110,14 +122,33 @@ final class OAuthCallbackServer: @unchecked Sendable {
         }
     }
 
+    private func cancelConnections() {
+        let all = connections.values
+        connections.removeAll()
+        all.forEach { $0.cancel() }
+    }
+
+    private func close(_ conn: NWConnection) {
+        connections.removeValue(forKey: ObjectIdentifier(conn))
+        conn.cancel()
+    }
+
     private func accept(_ conn: NWConnection) {
+        guard !finished else { conn.cancel(); return }
+        connections[ObjectIdentifier(conn)] = conn
         conn.start(queue: queue)
+        // 요청을 끝까지 보내지 않는 연결이 남지 않도록. 콜백으로 넘어간 연결은 집합에서 빠져 영향 없음.
+        queue.asyncAfter(deadline: .now() + connectionTimeout) { [weak self, weak conn] in
+            guard let self, let conn, self.connections[ObjectIdentifier(conn)] != nil else { return }
+            self.close(conn)
+        }
         receive(conn, buffer: Data())
     }
 
     private func receive(_ conn: NWConnection, buffer: Data) {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, isComplete, error in
             guard let self else { conn.cancel(); return }
+            guard self.connections[ObjectIdentifier(conn)] != nil else { return }  // 이미 정리됨
             var buffer = buffer
             if let data { buffer.append(data) }
             let headerEnd = buffer.range(of: Data("\r\n\r\n".utf8))
@@ -143,9 +174,9 @@ final class OAuthCallbackServer: @unchecked Sendable {
         let items = comps.queryItems ?? []
         func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
 
+        // state가 맞지 않는 요청은 거절만 하고 대기를 유지한다(임의 요청 하나로 로그인이 실패하지 않도록).
         guard value("state") == expectedState else {
-            send(conn, status: "400 Bad Request", body: "State mismatch")
-            return finish(.failure(AuthError.stateMismatch))
+            return send(conn, status: "400 Bad Request", body: "State mismatch")
         }
         guard let code = value("code"), !code.isEmpty else {
             send(conn, status: "400 Bad Request", body: "Authorization failed")
@@ -153,6 +184,7 @@ final class OAuthCallbackServer: @unchecked Sendable {
             return finish(.failure(AuthError.authorizationDenied(err)))
         }
         let successURL = self.successURL
+        connections.removeValue(forKey: ObjectIdentifier(conn))  // 소유권을 Callback으로 넘김(respond가 닫음)
         let callback = Callback(code: code) { [weak self] success in
             guard let self else { conn.cancel(); return }
             self.queue.async {
@@ -168,6 +200,8 @@ final class OAuthCallbackServer: @unchecked Sendable {
 
     private func send(_ conn: NWConnection, status: String, body: String, extraHeaders: String = "") {
         let bodyData = Data(body.utf8)
+        // 응답 전송 중인 연결은 finish/stop에 끊기지 않도록 집합에서 빼고, 전송 완료 시 닫는다.
+        connections.removeValue(forKey: ObjectIdentifier(conn))
         let head = "HTTP/1.1 \(status)\r\n\(extraHeaders)Content-Type: text/plain; charset=utf-8\r\nContent-Length: \(bodyData.count)\r\nConnection: close\r\n\r\n"
         conn.send(content: Data(head.utf8) + bodyData, completion: .contentProcessed { _ in conn.cancel() })
     }

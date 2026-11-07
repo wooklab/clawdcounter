@@ -1,6 +1,7 @@
 import AppKit
 import CoreModels
 import Foundation
+import os
 
 /// 앱 자체 OAuth(PKCE) 로그인으로 사용량 API용 토큰을 관리한다.
 /// Claude Code의 키체인 항목이나 ~/.claude 자격증명은 읽거나 쓰지 않는다.
@@ -21,12 +22,16 @@ public actor AuthManager: AuthManaging {
     private let now: @Sendable () -> Date
     private let callbackTimeout: TimeInterval
     private nonisolated let broadcaster = Broadcaster<AuthState>(replayLatest: true)
+    private static let log = Logger(subsystem: "clawdcounter", category: "AuthManager")
 
     private var tokens: StoredTokens?
     private var currentState: AuthState
     private var refreshTask: Task<StoredTokens, Error>?
-    /// logout마다 증가. 진행 중이던 refresh/login 결과가 logout 이후 반영되지 않게 한다.
+    private var loginTask: Task<StoredTokens, Error>?
+    /// logout·로그인 성공마다 증가. 진행 중이던 refresh/login 결과가 그 이후 반영되지 않게 한다.
     private var generation = 0
+    /// 로그인 진행 중 refresh가 invalid_grant를 받았는지. 로그인 실패 시 `.expired`로 정리한다.
+    private var expiredDuringLogin = false
 
     public init(
         config: OAuthConfig = .claudeAI,
@@ -105,7 +110,7 @@ public actor AuthManager: AuthManaging {
 
     public func validAccessToken() async throws -> String {
         guard let tokens else {
-            throw currentState == .expired ? AuthError.sessionExpired : AuthError.notSignedIn
+            throw currentState == .expired || expiredDuringLogin ? AuthError.sessionExpired : AuthError.notSignedIn
         }
         if tokens.expiresAt.timeIntervalSince(now()) > Self.refreshLeeway {
             return tokens.accessToken
@@ -130,12 +135,16 @@ public actor AuthManager: AuthManaging {
         }
     }
 
+    /// 진행 중인 refresh/login을 무효화하고 로컬 토큰을 지운 뒤 서버에 revoke를 시도한다.
+    /// 참고: refresh 요청이 이미 서버에 도달한 경우 회전된 새 refresh 토큰은 받지 못하므로 revoke되지 않는다.
     public func logout() async {
         generation += 1
         let refreshToken = tokens?.refreshToken
         tokens = nil
         refreshTask?.cancel()
         refreshTask = nil
+        loginTask?.cancel()  // 콜백 서버 대기는 취소 핸들러로 즉시 종료된다.
+        loginTask = nil
         try? store.delete()
         setState(.signedOut)
         if let refreshToken { await revoke(refreshToken) }
@@ -160,20 +169,39 @@ public actor AuthManager: AuthManaging {
         return comps.url!
     }
 
-    private func runLogin(_ body: (_ verifier: String, _ state: String) async throws -> StoredTokens) async throws {
+    private func runLogin(
+        _ body: @escaping @Sendable (_ verifier: String, _ state: String) async throws -> StoredTokens
+    ) async throws {
         guard currentState != .signingIn else { throw AuthError.loginInProgress }
         let previous = currentState
         let gen = generation
+        expiredDuringLogin = false
         setState(.signingIn)
+        let task = Task { try await body(PKCE.makeVerifier(), PKCE.makeState()) }
+        loginTask = task
+        defer { if loginTask == task { loginTask = nil } }
         do {
-            let newTokens = try await body(PKCE.makeVerifier(), PKCE.makeState())
+            let newTokens = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
             guard gen == generation else { throw AuthError.cancelled }
             try store.save(newTokens)
+            // 이전 토큰으로 진행 중인 refresh가 새 토큰을 덮어쓰거나 지우지 못하게 무효화.
+            refreshTask?.cancel()
             refreshTask = nil
+            generation += 1
+            expiredDuringLogin = false
             tokens = newTokens
             setState(.signedIn)
         } catch {
-            if gen == generation && currentState == .signingIn { setState(previous) }
+            guard gen == generation else { throw AuthError.cancelled }  // logout으로 취소됨
+            if currentState == .signingIn {
+                if expiredDuringLogin {
+                    expiredDuringLogin = false
+                    try? store.delete()
+                    setState(.expired)
+                } else {
+                    setState(previous)
+                }
+            }
             throw error
         }
     }
@@ -199,21 +227,56 @@ public actor AuthManager: AuthManaging {
             "client_id": config.clientID,
             "scope": scopes.joined(separator: " "),
         ]
-        let (data, response) = try await post(config.tokenURL, body: body, timeout: 30)
-        guard gen == generation else { throw AuthError.notSignedIn }
+        let data: Data
+        let response: HTTPURLResponse
+        do {
+            (data, response) = try await post(config.tokenURL, body: body, timeout: 30)
+        } catch {
+            if isSuperseded(generation: gen, refreshToken: refreshToken) { return try currentTokens() }
+            throw error
+        }
+        // 요청 중 logout/새 로그인이 있었으면 이 결과는 버리고 현재 토큰을 돌려준다.
+        if isSuperseded(generation: gen, refreshToken: refreshToken) { return try currentTokens() }
         if response.statusCode != 200 {
             if (response.statusCode == 400 || response.statusCode == 401) && Self.oauthErrorCode(data) == "invalid_grant" {
                 tokens = nil
-                try? store.delete()
-                setState(.expired)
+                if currentState == .signingIn {
+                    // 로그인 진행 중엔 상태/저장소를 건드리지 않는다(중복 로그인 가드 유지). 실패 시 runLogin이 정리.
+                    expiredDuringLogin = true
+                } else {
+                    try? store.delete()
+                    setState(.expired)
+                }
                 throw AuthError.sessionExpired
             }
             throw AuthError.refreshFailed(status: response.statusCode)
         }
         let newTokens = try decodeTokens(data, fallbackRefreshToken: refreshToken, fallbackScopes: scopes)
         tokens = newTokens
-        try store.save(newTokens)
+        persistRefreshed(newTokens)
         return newTokens
+    }
+
+    private func isSuperseded(generation gen: Int, refreshToken: String) -> Bool {
+        gen != generation || tokens?.refreshToken != refreshToken
+    }
+
+    private func currentTokens() throws -> StoredTokens {
+        guard let tokens else { throw AuthError.notSignedIn }
+        return tokens
+    }
+
+    /// 갱신된 토큰은 이미 메모리에 반영됐으므로 저장 실패는 호출자에게 던지지 않는다(1회 재시도 후 로그만).
+    private func persistRefreshed(_ newTokens: StoredTokens) {
+        for attempt in 1...2 {
+            do {
+                try store.save(newTokens)
+                return
+            } catch {
+                let reason = (error as? AuthError)?.description ?? String(describing: type(of: error))
+                Self.log.error("갱신 토큰 저장 실패 (시도 \(attempt, privacy: .public)): \(reason, privacy: .public)")
+            }
+        }
     }
 
     private func revoke(_ refreshToken: String) async {

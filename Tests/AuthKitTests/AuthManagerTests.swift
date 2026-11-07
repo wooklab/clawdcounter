@@ -166,7 +166,10 @@ final class AuthManagerTests: XCTestCase {
             StubTransport.response(400, #"{"error":{"type":"invalid_grant","message":"x"}}"#)
         }
         let m = makeManager(store: store, transport: transport, clock: clock)
-        let states = m.stateStream()
+        // Broadcaster는 bufferingNewest(1)이므로 replay 값을 먼저 소비해야 다음 값이 덮어쓰지 않는다.
+        var states = m.stateStream().makeAsyncIterator()
+        let first = await states.next()
+        XCTAssertEqual(first, .signedIn)
         do {
             _ = try await m.validAccessToken()
             XCTFail("expected sessionExpired")
@@ -176,9 +179,8 @@ final class AuthManagerTests: XCTestCase {
         let state = await m.state
         XCTAssertEqual(state, .expired)
         XCTAssertNil(try store.load())
-        var seen: [AuthState] = []
-        for await s in states { seen.append(s); if seen.count == 2 { break } }
-        XCTAssertEqual(seen, [.signedIn, .expired])
+        let second = await states.next()
+        XCTAssertEqual(second, .expired)
         do { _ = try await m.validAccessToken(); XCTFail() } catch {
             XCTAssertEqual(error as? AuthError, .sessionExpired)
         }
@@ -266,5 +268,193 @@ final class AuthManagerTests: XCTestCase {
         let t = StoredTokens(accessToken: "SECRET_AT", refreshToken: "SECRET_RT", expiresAt: Date(), scopes: [])
         XCTAssertFalse("\(t)".contains("SECRET"))
         XCTAssertFalse(String(reflecting: t).contains("SECRET"))
+    }
+
+    // MARK: 로그인/refresh 경합 (리뷰 #1)
+
+    private let tokenJSON_B = #"{"access_token":"AT_B","refresh_token":"RT_B","expires_in":3600}"#
+
+    private static func manualCode(_ url: URL) -> String { "CODE#\(queryValue(url, "state")!)" }
+
+    func testLoginDuringRefreshIsNotOverwrittenByStaleRefresh() async throws {
+        let clock = TestClock()
+        let store = InMemoryTokenStore(storedTokens(expiresIn: 0, clock: clock))
+        let gate = Gate()
+        let transport = StubTransport { [tokenJSON_B] req in
+            if jsonBody(req)["grant_type"] == "refresh_token" {
+                await gate.wait()
+                return StubTransport.response(200, #"{"access_token":"AT_A2","refresh_token":"RT_A2","expires_in":3600}"#)
+            }
+            return StubTransport.response(200, tokenJSON_B)
+        }
+        let m = makeManager(store: store, transport: transport, clock: clock)
+        let refreshing = Task { try await m.validAccessToken() }
+        try await waitUntil { transport.requests.count == 1 }
+        try await m.login(manualCodeProvider: { Self.manualCode($0) })
+        gate.open()
+        let token = try await refreshing.value
+        XCTAssertEqual(token, "AT_B")
+        XCTAssertEqual(try store.load()?.refreshToken, "RT_B")
+        let state = await m.state
+        XCTAssertEqual(state, .signedIn)
+        let again = try await m.validAccessToken()
+        XCTAssertEqual(again, "AT_B")
+        XCTAssertEqual(transport.requests.count, 2)
+    }
+
+    func testStaleInvalidGrantAfterLoginDoesNotExpireNewSession() async throws {
+        let clock = TestClock()
+        let store = InMemoryTokenStore(storedTokens(expiresIn: 0, clock: clock))
+        let gate = Gate()
+        let transport = StubTransport { [tokenJSON_B] req in
+            if jsonBody(req)["grant_type"] == "refresh_token" {
+                await gate.wait()
+                return StubTransport.response(400, #"{"error":"invalid_grant"}"#)
+            }
+            return StubTransport.response(200, tokenJSON_B)
+        }
+        let m = makeManager(store: store, transport: transport, clock: clock)
+        let refreshing = Task { try await m.validAccessToken() }
+        try await waitUntil { transport.requests.count == 1 }
+        try await m.login(manualCodeProvider: { Self.manualCode($0) })
+        gate.open()
+        let token = try await refreshing.value
+        XCTAssertEqual(token, "AT_B")
+        let state = await m.state
+        XCTAssertEqual(state, .signedIn)
+        XCTAssertEqual(try store.load()?.refreshToken, "RT_B")
+    }
+
+    func testInvalidGrantDuringLoginKeepsSigningInGuard() async throws {
+        let clock = TestClock()
+        let store = InMemoryTokenStore(storedTokens(expiresIn: 0, clock: clock))
+        let refreshGate = Gate(), loginGate = Gate()
+        let transport = StubTransport { [tokenJSON_B] req in
+            if jsonBody(req)["grant_type"] == "refresh_token" {
+                await refreshGate.wait()
+                return StubTransport.response(400, #"{"error":"invalid_grant"}"#)
+            }
+            return StubTransport.response(200, tokenJSON_B)
+        }
+        let m = makeManager(store: store, transport: transport, clock: clock)
+        let refreshing = Task { try await m.validAccessToken() }
+        try await waitUntil { transport.requests.count == 1 }
+        let login = Task {
+            try await m.login(manualCodeProvider: { url in await loginGate.wait(); return Self.manualCode(url) })
+        }
+        try await waitUntil { await m.state == .signingIn }
+        refreshGate.open()
+        do { _ = try await refreshing.value; XCTFail("expected sessionExpired") } catch {
+            XCTAssertEqual(error as? AuthError, .sessionExpired)
+        }
+        let during = await m.state
+        XCTAssertEqual(during, .signingIn)
+        XCTAssertEqual(try store.load()?.refreshToken, "RT_OLD")
+        do { try await m.login(manualCodeProvider: { Self.manualCode($0) }); XCTFail("expected loginInProgress") } catch {
+            XCTAssertEqual(error as? AuthError, .loginInProgress)
+        }
+        loginGate.open()
+        try await login.value
+        let after = await m.state
+        XCTAssertEqual(after, .signedIn)
+        XCTAssertEqual(try store.load()?.refreshToken, "RT_B")
+    }
+
+    func testInvalidGrantDuringFailedLoginEndsExpired() async throws {
+        let clock = TestClock()
+        let store = InMemoryTokenStore(storedTokens(expiresIn: 0, clock: clock))
+        let refreshGate = Gate(), loginGate = Gate()
+        let transport = StubTransport { _ in
+            await refreshGate.wait()
+            return StubTransport.response(400, #"{"error":"invalid_grant"}"#)
+        }
+        let m = makeManager(store: store, transport: transport, clock: clock)
+        let refreshing = Task { try await m.validAccessToken() }
+        try await waitUntil { transport.requests.count == 1 }
+        let login = Task {
+            try await m.login(manualCodeProvider: { _ in await loginGate.wait(); return "malformed" })
+        }
+        try await waitUntil { await m.state == .signingIn }
+        refreshGate.open()
+        _ = try? await refreshing.value
+        loginGate.open()
+        do { try await login.value; XCTFail("expected invalidManualCode") } catch {
+            XCTAssertEqual(error as? AuthError, .invalidManualCode)
+        }
+        let state = await m.state
+        XCTAssertEqual(state, .expired)
+        XCTAssertNil(try store.load())
+    }
+
+    // MARK: refresh 저장 실패 (리뷰 #2)
+
+    func testRefreshSaveFailureRetriesOnce() async throws {
+        let clock = TestClock()
+        let store = FlakySaveStore(storedTokens(expiresIn: 0, clock: clock), failSaves: 1)
+        let transport = StubTransport { [tokenJSON] _ in StubTransport.response(200, tokenJSON) }
+        let m = AuthManager(store: store, transport: transport, openURL: { _ in }, now: { clock.now }, callbackTimeout: 5)
+        let token = try await m.validAccessToken()
+        XCTAssertEqual(token, "AT_NEW")
+        XCTAssertEqual(store.saveAttempts, 2)
+        XCTAssertEqual(store.stored?.refreshToken, "RT_NEW")
+    }
+
+    func testRefreshSaveFailureStillReturnsTokenAndKeepsMemory() async throws {
+        let clock = TestClock()
+        let store = FlakySaveStore(storedTokens(expiresIn: 0, clock: clock), failSaves: .max)
+        let transport = StubTransport { [tokenJSON] _ in StubTransport.response(200, tokenJSON) }
+        let m = AuthManager(store: store, transport: transport, openURL: { _ in }, now: { clock.now }, callbackTimeout: 5)
+        let token = try await m.validAccessToken()
+        XCTAssertEqual(token, "AT_NEW")
+        XCTAssertEqual(store.saveAttempts, 2)
+        let state = await m.state
+        XCTAssertEqual(state, .signedIn)
+        let again = try await m.validAccessToken()
+        XCTAssertEqual(again, "AT_NEW")
+        XCTAssertEqual(transport.requests.count, 1)
+    }
+
+    // MARK: logout이 진행 중 로그인 취소 (리뷰 #6)
+
+    func testLogoutCancelsPendingCallbackLogin() async throws {
+        let store = InMemoryTokenStore()
+        let opened = Gate()
+        let transport = StubTransport { [tokenJSON] _ in StubTransport.response(200, tokenJSON) }
+        let m = makeManager(store: store, transport: transport, opener: { _ in opened.open() })
+        let login = Task { try await m.login() }
+        await opened.wait()
+        let start = Date()
+        await m.logout()
+        do { try await login.value; XCTFail("expected cancelled") } catch {
+            XCTAssertEqual(error as? AuthError, .cancelled)
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+        let state = await m.state
+        XCTAssertEqual(state, .signedOut)
+        XCTAssertTrue(transport.requests.isEmpty)
+        try await m.login(manualCodeProvider: { Self.manualCode($0) })
+        let after = await m.state
+        XCTAssertEqual(after, .signedIn)
+    }
+
+    func testLoginFinishingAfterLogoutIsDiscarded() async throws {
+        let store = InMemoryTokenStore()
+        let transport = StubTransport { [tokenJSON] _ in StubTransport.response(200, tokenJSON) }
+        let m = makeManager(store: store, transport: transport)
+        do {
+            try await m.login(manualCodeProvider: { url in
+                await m.logout()
+                return Self.manualCode(url)
+            })
+            XCTFail("expected cancelled")
+        } catch {
+            XCTAssertEqual(error as? AuthError, .cancelled)
+        }
+        XCTAssertNil(try store.load())
+        let state = await m.state
+        XCTAssertEqual(state, .signedOut)
+        do { _ = try await m.validAccessToken(); XCTFail() } catch {
+            XCTAssertEqual(error as? AuthError, .notSignedIn)
+        }
     }
 }
