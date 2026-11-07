@@ -86,6 +86,7 @@ public protocol SessionMonitoring: Sendable {
 }
 
 /// 멀티캐스트 헬퍼. `stream()` 호출마다 독립 AsyncStream을 반환하고 `send(_:)`가 모든 구독자에게 전달한다.
+/// 상태 스트림 용도: 구독자별 버퍼는 최신 1개만 유지하므로 느린 소비자는 중간 값을 건너뛴다.
 public final class Broadcaster<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuations: [UUID: AsyncStream<T>.Continuation] = [:]
@@ -99,7 +100,7 @@ public final class Broadcaster<T: Sendable>: @unchecked Sendable {
 
     public func stream() -> AsyncStream<T> {
         let id = UUID()
-        let (stream, continuation) = AsyncStream<T>.makeStream()
+        let (stream, continuation) = AsyncStream<T>.makeStream(bufferingPolicy: .bufferingNewest(1))
         lock.lock()
         continuations[id] = continuation
         let replay = replayLatest ? latest : nil

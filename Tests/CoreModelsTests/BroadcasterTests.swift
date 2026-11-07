@@ -12,8 +12,8 @@ final class BroadcasterTests: XCTestCase {
         var r1: [Int] = [], r2: [Int] = []
         for await v in s1 { r1.append(v) }
         for await v in s2 { r2.append(v) }
-        XCTAssertEqual(r1, [1, 2])
-        XCTAssertEqual(r2, [1, 2])
+        XCTAssertEqual(r1, [2]) // bufferingNewest(1): 소비 전 연속 send는 최신만 남는다
+        XCTAssertEqual(r2, [2])
     }
 
     func testNoReplayByDefault() async {
@@ -36,7 +36,39 @@ final class BroadcasterTests: XCTestCase {
         b.finish()
         var r: [Int] = []
         for await v in s { r.append(v) }
-        XCTAssertEqual(r, [2, 3])
+        XCTAssertEqual(r, [3]) // 재생값(2)은 소비 전에 3으로 대체됨
+    }
+
+    func testReplayLatestDeliveredWhenConsumedBeforeNextSend() async {
+        let b = Broadcaster<Int>(replayLatest: true)
+        b.send(1)
+        b.send(2)
+        var it = b.stream().makeAsyncIterator()
+        let first = await it.next()
+        XCTAssertEqual(first, 2)
+        b.send(3)
+        let second = await it.next()
+        XCTAssertEqual(second, 3)
+    }
+
+    func testSlowConsumerReceivesOnlyLatest() async {
+        let b = Broadcaster<Int>()
+        let s = b.stream()
+        for i in 1...100 { b.send(i) }
+        b.finish()
+        var r: [Int] = []
+        for await v in s { r.append(v) }
+        XCTAssertEqual(r, [100])
+    }
+
+    func testFastConsumerSeesEveryValue() async {
+        let b = Broadcaster<Int>()
+        var it = b.stream().makeAsyncIterator()
+        for i in 1...5 {
+            b.send(i)
+            let v = await it.next()
+            XCTAssertEqual(v, i)
+        }
     }
 
     func testCancelledSubscriberIsRemoved() async {
@@ -61,8 +93,9 @@ final class BroadcasterTests: XCTestCase {
             for i in 0..<100 { g.addTask { b.send(i) } }
         }
         b.finish()
-        var count = 0
-        for await _ in s { count += 1 }
-        XCTAssertEqual(count, 100)
+        var received: [Int] = []
+        for await v in s { received.append(v) }
+        XCTAssertEqual(received.count, 1) // 소비 전 100회 send → 최신 1개만 남음
+        XCTAssertTrue((0..<100).contains(received[0]))
     }
 }

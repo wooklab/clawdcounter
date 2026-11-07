@@ -281,4 +281,60 @@ final class SessionMonitorTests: XCTestCase {
         m.stop()
         XCTAssertTrue(ok, "restart: \(e.all)")
     }
+
+    /// stop() 없이 해제: 크래시 없이 해제되고, 해제 후에는 emit이 없어야 한다.
+    func testReleaseWithoutStopIsSafeAndSilent() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let p = try spawnSleeper(); defer { p.terminate() }
+        let e = Emissions()
+        var task: Task<Void, Never>?
+        weak var weakMonitor: SessionMonitor?
+        do {
+            let m = monitor(dir)
+            weakMonitor = m
+            let stream = m.countsStream()
+            task = Task { for await c in stream { e.append(c) } }
+            m.start() // stop() 호출 없이 스코프 종료
+            let ok = await waitUntil { e.latest == counts(0, 0, 0) }
+            XCTAssertTrue(ok, "initial: \(e.all)")
+        }
+        defer { task?.cancel() }
+        let released = await waitUntil { weakMonitor == nil }
+        XCTAssertTrue(released, "monitor must be deallocated without stop()")
+        let before = e.all.count
+        for i in 0..<20 { // 해제 직후 이벤트 폭주
+            try write(dir, pid: Int(p.processIdentifier), status: i.isMultiple(of: 2) ? "busy" : "idle", atomic: false)
+        }
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertEqual(e.all.count, before, "no emission after release: \(e.all)")
+    }
+}
+
+final class FSEventsWatcherTests: XCTestCase {
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var n = 0
+        var value: Int { lock.lock(); defer { lock.unlock() }; return n }
+        func inc() { lock.lock(); n += 1; lock.unlock() }
+    }
+
+    func testDeinitWithoutStopStopsCallbacks() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let queue = DispatchQueue(label: "test.fsevents")
+        let counter = Counter()
+        var watcher: FSEventsWatcher? = FSEventsWatcher(path: dir.path, queue: queue) { counter.inc() }
+        queue.sync { watcher?.start() }
+        try Data("a".utf8).write(to: dir.appendingPathComponent("a.txt"))
+        let fired = await waitUntil { counter.value > 0 }
+        XCTAssertTrue(fired, "watcher should fire while alive")
+
+        watcher = nil // 큐 밖 스레드에서 deinit, stop() 없음
+        queue.sync {}  // 이미 큐에 들어간 콜백 배출
+        let before = counter.value
+        for i in 0..<10 { try Data("b\(i)".utf8).write(to: dir.appendingPathComponent("b\(i).txt")) }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertEqual(counter.value, before, "no callback after deinit")
+    }
 }
