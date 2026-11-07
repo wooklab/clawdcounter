@@ -1,3 +1,0 @@
-import CoreModels
-
-enum UsageKitPlaceholder {}
