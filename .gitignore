@@ -3,3 +3,4 @@
 *.app
 xcuserdata/
 .DS_Store
+build/
