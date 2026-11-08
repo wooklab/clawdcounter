@@ -4,6 +4,14 @@
 
 Claude の使用量の上限(5時間 / 週間)と、ローカルの Claude Code セッションの状況を macOS のメニューバーにひと目で表示する非公式アプリです。Anthropic とは無関係で、文書化されていないエンドポイントを利用しているため、いつ変更・遮断されてもおかしくありません。UI は韓国語、英語、簡体字中国語、日本語に対応しています。
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme-menu-ja-dark.png">
+    <img src="docs/images/readme-menu-ja-light.png" alt="メニューバー項目と開いたドロップダウンメニュー" width="380">
+  </picture>
+</p>
+<p align="center"><sub>サンプルデータで描画した画面です。</sub></p>
+
 ## 機能
 
 - **メニューバーの表示**: `5時間 上限の残り時間 | [5時間バー / 週間バー] | ● アクティブ数 / ○ 非アクティブ数 | ✋ 応答待ち`
@@ -38,9 +46,17 @@ Claude の使用量の上限(5時間 / 週間)と、ローカルの Claude Code 
 ## 動作要件
 
 - macOS 14 以上
-- Xcode と Swift 6 ツールチェーン (`swift-tools-version: 6.0`)
+- リリース版アプリ: Apple シリコン搭載 Mac (Intel Mac ではソースからビルドしてください)
+- ソースからのビルド: Xcode と Swift 6 ツールチェーン (`swift-tools-version: 6.0`)
 
 ## インストール / ビルド
+
+### リリースからダウンロード
+
+1. [Releases](https://github.com/wooklab/clawdcounter/releases/latest) から `ClawdCounter-<バージョン>.dmg` をダウンロードして開きます。
+2. `ClawdCounter.app` を `Applications`(アプリケーション)フォルダにドラッグします。
+
+### ソースからビルド
 
 ```sh
 git clone https://github.com/wooklab/clawdcounter.git
@@ -53,12 +69,12 @@ open build/ClawdCounter.app
 
 ### 初回起動時の警告
 
-ビルドスクリプトは一時的な(ad-hoc)署名(`codesign --sign -`)しか行いません。自分でビルドしたアプリは通常、警告なしで起動しますが、他の場所からダウンロードしたアプリや、圧縮して移動したアプリでは Gatekeeper の警告が表示されることがあります。その場合は、次のいずれかを実行してください。
+リリース版アプリもビルドスクリプトも一時的な(ad-hoc)署名(`codesign --sign -`)のみで、Apple の公証は受けていません。自分でビルドしたアプリは通常、警告なしで起動しますが、ダウンロードしたリリース版アプリは初回起動時に Gatekeeper にブロックされます。その場合は、次のいずれかを実行してください。
 
-- Finder で `build/ClawdCounter.app` を右クリック → **開く**
-- または `xattr -dr com.apple.quarantine build/ClawdCounter.app`
+- 警告を閉じてから **システム設定 → プライバシーとセキュリティ** を開き、ClawdCounter の項目の **このまま開く** をクリックします。
+- または `xattr -dr com.apple.quarantine /Applications/ClawdCounter.app` を実行します。
 
-`xattr` コマンドは**自分でビルドしたアプリにのみ**使用してください。出所の分からないアプリには使わないでください。
+`xattr` コマンドは**このリポジトリのリリース版か、自分でビルドしたアプリにのみ**使用してください。出所の分からないアプリには使わないでください。
 
 ### キーチェーンの確認ダイアログ
 
@@ -103,7 +119,7 @@ open build/ClawdCounter.app
 - セッションのリセット権(チケット)の数は、実際の応答にフィールドが見つからなかったため**サポートしていません**。
 - **応答待ち**の状態は、`claude` バイナリの解析で分かった値(`waiting`)に基づいており、実際のセッションでは確認できていません。
 - セッション名のクリックは**アプリ単位で最前面に表示する**だけで、アプリ内の特定のタブ/ウィンドウ/セッションを選ぶことはありません。tmux のように親プロセスの連鎖が途切れる場合は、アプリを見つけられません。
-- 署名していない(一時署名の)ローカルビルドのみをサポートしており、配布用のバイナリは提供していません。
+- リリース版アプリは一時署名のみで Apple の公証を受けておらず、Apple シリコン専用です。
 
 ## 開発
 
@@ -112,7 +128,7 @@ swift test                  # 全ユニットテスト
 swift run RenderPreview     # メニューバー画像/ドロップダウンの PNG を描画 -> build/preview/
 ```
 
-`RenderPreview` はプロジェクトルートで実行する必要があり、ライト/ダーク別の PNG とメニュー構造のテキスト(`menus.txt`)を `build/preview/` に生成します。
+`RenderPreview` はプロジェクトルートで実行する必要があり、ライト/ダーク別の PNG とメニュー構造のテキスト(`menus.txt`)を `build/preview/` に生成し、README に載せる言語別の画面画像(`docs/images/readme-menu-*.png`)も再生成します。
 
 ### `--probe-usage` 診断フラグ
 

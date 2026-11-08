@@ -4,6 +4,14 @@
 
 ClawdCounter 是一款非官方的 macOS 菜单栏应用，在菜单栏中显示 Claude 的用量限额（5 小时 / 每周）以及本地 Claude Code 会话的状态。它与 Anthropic 无关，所依赖的是未公开文档的接口，这些接口随时可能变更或被封锁。界面支持韩语、英语、简体中文和日语。
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme-menu-zh-Hans-dark.png">
+    <img src="docs/images/readme-menu-zh-Hans-light.png" alt="菜单栏项目及展开的下拉菜单" width="380">
+  </picture>
+</p>
+<p align="center"><sub>使用示例数据渲染的画面。</sub></p>
+
 ## 功能
 
 - **菜单栏显示**：`5 小时限额剩余时间 | [5 小时进度条 / 每周进度条] | ● 活跃数 / ○ 空闲数 | ✋ 等待响应`
@@ -38,9 +46,17 @@ ClawdCounter 是一款非官方的 macOS 菜单栏应用，在菜单栏中显示
 ## 系统要求
 
 - macOS 14 及以上
-- Xcode 和 Swift 6 工具链（`swift-tools-version: 6.0`）
+- 发布版应用：Apple 芯片 Mac（Intel Mac 需要从源码自行构建）
+- 从源码构建：Xcode 和 Swift 6 工具链（`swift-tools-version: 6.0`）
 
 ## 安装 / 构建
+
+### 下载发布版
+
+1. 从 [Releases](https://github.com/wooklab/clawdcounter/releases/latest) 下载 `ClawdCounter-<版本>.dmg` 并打开。
+2. 将 `ClawdCounter.app` 拖到 `Applications`（应用程序）文件夹中。
+
+### 从源码构建
 
 ```sh
 git clone https://github.com/wooklab/clawdcounter.git
@@ -53,12 +69,12 @@ open build/ClawdCounter.app
 
 ### 首次运行警告
 
-构建脚本只做临时（ad-hoc）签名（`codesign --sign -`）。自行构建的应用通常可以无警告运行，但从其他地方下载或压缩后转移过来的应用，可能会弹出 Gatekeeper 警告。遇到这种情况，请使用下列方式之一。
+发布版应用和构建脚本都只做临时（ad-hoc）签名（`codesign --sign -`），未经过 Apple 公证。自行构建的应用通常可以无警告运行，但下载的发布版应用在首次运行时会被 Gatekeeper 拦截。遇到这种情况，请使用下列方式之一。
 
-- 在 Finder 中右键点击 `build/ClawdCounter.app` → **打开**
-- 或者执行 `xattr -dr com.apple.quarantine build/ClawdCounter.app`
+- 关闭警告窗口后，打开**系统设置 → 隐私与安全性**，在 ClawdCounter 一项旁点击**仍要打开**。
+- 或者执行 `xattr -dr com.apple.quarantine /Applications/ClawdCounter.app`
 
-`xattr` 命令**只能用于你自己构建的应用**。不要对来源不明的应用使用。
+`xattr` 命令**只能用于本仓库的发布版或你自己构建的应用**。不要对来源不明的应用使用。
 
 ### 钥匙串确认窗口
 
@@ -103,7 +119,7 @@ open build/ClawdCounter.app
 - 会话重置券（ticket）的数量在实际响应中没有找到对应字段，因此**不支持**。
 - **等待响应**状态基于通过分析 `claude` 二进制文件得到的值（`waiting`），尚未在实际会话中确认。
 - 点击会话名只会**以应用为单位切换到前台**，不会选中应用内的某个特定标签页 / 窗口 / 会话。像 tmux 这样父进程链断开的情况，找不到对应的应用。
-- 只支持未签名（临时签名）的本地构建，不提供用于分发的二进制文件。
+- 发布版应用只做了临时签名，未经过 Apple 公证，并且仅支持 Apple 芯片。
 
 ## 开发
 
@@ -112,7 +128,7 @@ swift test                  # 全部单元测试
 swift run RenderPreview     # 渲染菜单栏图像 / 下拉菜单 PNG -> build/preview/
 ```
 
-`RenderPreview` 必须在项目根目录下运行，它会在 `build/preview/` 中生成浅色 / 深色两套 PNG 以及菜单结构文本（`menus.txt`）。
+`RenderPreview` 必须在项目根目录下运行，它会在 `build/preview/` 中生成浅色 / 深色两套 PNG 以及菜单结构文本（`menus.txt`），同时重新生成 README 中各语言的界面图片（`docs/images/readme-menu-*.png`）。
 
 ### `--probe-usage` 诊断参数
 

@@ -4,6 +4,14 @@
 
 An unofficial macOS menu bar app that shows your Claude usage limits (5-hour / weekly) and the state of your local Claude Code sessions at a glance. Not affiliated with Anthropic; it relies on undocumented endpoints that may change or be blocked at any time. The UI supports Korean, English, Simplified Chinese, and Japanese.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme-menu-en-dark.png">
+    <img src="docs/images/readme-menu-en-light.png" alt="Menu bar item with the dropdown menu open" width="380">
+  </picture>
+</p>
+<p align="center"><sub>Rendered with sample data.</sub></p>
+
 ## Features
 
 - **Menu bar display**: `5-hour time remaining | [5-hour bar / Weekly bar] | ● Active count / ○ Idle count | ✋ Waiting`
@@ -38,9 +46,17 @@ An unofficial macOS menu bar app that shows your Claude usage limits (5-hour / w
 ## Requirements
 
 - macOS 14 or later
-- Xcode and the Swift 6 toolchain (`swift-tools-version: 6.0`)
+- Release app: Apple Silicon Mac (on an Intel Mac, build from source)
+- Building from source: Xcode and the Swift 6 toolchain (`swift-tools-version: 6.0`)
 
 ## Installation / Build
+
+### Download a release
+
+1. Download `ClawdCounter-<version>.dmg` from [Releases](https://github.com/wooklab/clawdcounter/releases/latest) and open it.
+2. Drag `ClawdCounter.app` into the `Applications` folder.
+
+### Build from source
 
 ```sh
 git clone https://github.com/wooklab/clawdcounter.git
@@ -53,12 +69,12 @@ The app is menu bar only (`LSUIElement`), so it has no Dock icon.
 
 ### First-launch warning
 
-The build script only applies an ad-hoc signature (`codesign --sign -`). An app you built yourself usually launches without a warning, but an app that was downloaded elsewhere or moved as an archive may trigger a Gatekeeper warning. In that case, use one of the following:
+Both the release app and the build script use only an ad-hoc signature (`codesign --sign -`), and the app is not notarized by Apple. An app you built yourself usually launches without a warning, but Gatekeeper blocks a downloaded release app on first launch. In that case, use one of the following:
 
-- In Finder, right-click `build/ClawdCounter.app` → **Open**
-- Or run `xattr -dr com.apple.quarantine build/ClawdCounter.app`
+- Close the warning, then open **System Settings → Privacy & Security** and click **Open Anyway** next to ClawdCounter.
+- Or run `xattr -dr com.apple.quarantine /Applications/ClawdCounter.app`
 
-Use the `xattr` command **only on an app you built yourself**. Never use it on an app of unknown origin.
+Use the `xattr` command **only on a release from this repository or an app you built yourself**. Never use it on an app of unknown origin.
 
 ### Keychain prompt
 
@@ -103,7 +119,7 @@ When you log in, the app stores the tokens (access/refresh) in its own Keychain 
 - The count of session reset passes (tickets) is **not supported**, because no such field was found in the actual responses.
 - The **Waiting** state is based on a value (`waiting`) found by analyzing the `claude` binary, and it has not been confirmed in a real session.
 - Clicking a session name only brings **the app** to the front; it does not select a specific tab, window, or session within the app. If the parent process chain is broken, as with tmux, the app cannot be found.
-- Only unsigned (ad-hoc signed) local builds are supported, and no distribution binaries are provided.
+- Release apps are only ad-hoc signed, are not notarized by Apple, and run on Apple Silicon only.
 
 ## Development
 
@@ -112,7 +128,7 @@ swift test                  # Run all unit tests
 swift run RenderPreview     # Render menu bar image/dropdown PNGs -> build/preview/
 ```
 
-`RenderPreview` must be run from the project root. It writes light and dark PNGs and a text file of the menu structure (`menus.txt`) to `build/preview/`.
+`RenderPreview` must be run from the project root. It writes light and dark PNGs and a text file of the menu structure (`menus.txt`) to `build/preview/`, and also regenerates the per-language README screenshots (`docs/images/readme-menu-*.png`).
 
 ### `--probe-usage` diagnostic flag
 

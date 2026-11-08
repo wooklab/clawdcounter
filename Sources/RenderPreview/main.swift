@@ -307,7 +307,7 @@ for lang in Language.allCases {
 }
 
 // README 스크린샷: 메뉴바 항목과 펼친 드롭다운 전체를 가짜 데이터로 합성한다.
-// (docs/images/readme-menu-<light|dark>.png)
+// (docs/images/readme-menu-<언어>-<light|dark>.png)
 @MainActor final class PreviewSeparatorRow: NSView {
     override var isFlipped: Bool { true }
     override func draw(_ dirtyRect: NSRect) {
@@ -319,10 +319,17 @@ for lang in Language.allCases {
 @MainActor func readmePNG(mode: Mode, lang: Language) -> Data {
     let usage = UsageSnapshot(
         fiveHour: win(42, in: 2 * h + 13 * 60), weekly: win(63, in: 3 * 86400 + 5 * h), fetchedAt: now)
+    // 세션명은 사용자가 정하는 값이라, 문서 언어에 맞춘 예시를 쓴다.
+    let names: [String] = switch lang {
+    case .ko: ["clawdcounter 드롭다운", "README 스크린샷", "릴리스 노트 정리"]
+    case .en: ["clawdcounter dropdown", "README screenshots", "Draft release notes"]
+    case .zhHans: ["clawdcounter 下拉菜单", "README 截图", "整理发布说明"]
+    case .ja: ["clawdcounter ドロップダウン", "README スクリーンショット", "リリースノート整理"]
+    }
     let sessions = SessionCounts(
         active: 2, waiting: 1, idle: 3,
-        activeSessions: ["clawdcounter 드롭다운", "README 스크린샷"].map { SessionRef(name: $0) },
-        waitingSessions: [SessionRef(name: "릴리스 노트 정리")],
+        activeSessions: names.prefix(2).map { SessionRef(name: $0) },
+        waitingSessions: [SessionRef(name: names[2])],
         idleSessions: ["docs", "refactor-auth", "landing-page"].map { SessionRef(name: $0) })
     let menu = MenuBuilder(actions: actions).buildMenu(
         usage: usage, sessions: sessions, auth: .signedIn,
@@ -406,9 +413,11 @@ for lang in Language.allCases {
 
 let imagesDir = URL(fileURLWithPath: "docs/images", isDirectory: true)
 try FileManager.default.createDirectory(at: imagesDir, withIntermediateDirectories: true)
-for mode in Mode.allCases {
-    let url = imagesDir.appendingPathComponent("readme-menu-\(mode.rawValue).png")
-    try readmePNG(mode: mode, lang: .ko).write(to: url)
-    written.append(url.path)
+for lang in Language.allCases {
+    for mode in Mode.allCases {
+        let url = imagesDir.appendingPathComponent("readme-menu-\(lang.rawValue)-\(mode.rawValue).png")
+        try readmePNG(mode: mode, lang: lang).write(to: url)
+        written.append(url.path)
+    }
 }
 print(written.joined(separator: "\n"))
