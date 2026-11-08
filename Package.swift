@@ -18,7 +18,7 @@ let package = Package(
         .testTarget(name: "CoreModelsTests", dependencies: ["CoreModels"]),
         .testTarget(name: "SessionsKitTests", dependencies: ["SessionsKit"]),
         .testTarget(name: "AuthKitTests", dependencies: ["AuthKit"]),
-        .testTarget(name: "UsageKitTests", dependencies: ["UsageKit"]),
+        .testTarget(name: "UsageKitTests", dependencies: ["UsageKit"], exclude: ["Fixtures"]),
         .testTarget(name: "MenuBarUITests", dependencies: ["MenuBarUI", "CoreModels"]),
     ]
 )

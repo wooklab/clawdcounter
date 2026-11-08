@@ -63,6 +63,17 @@ final class MenuBuilderTests: XCTestCase {
         XCTAssertEqual(t.first, "주간 한도 63% · 남은 3일 5시간")
     }
 
+    func testFiveHourWithoutActiveWindowShowsNote() {
+        let u = UsageSnapshot(
+            fiveHour: LimitWindow(usedPercent: 0, resetsAt: nil), weekly: win(5, 6 * 86400), fetchedAt: now)
+        XCTAssertEqual(titles(build(u)).prefix(2), ["5시간 한도 0% · 활성 창 없음", "주간 한도 5% · 남은 6일"])
+    }
+
+    func testWeeklyWithoutResetHasNoInactiveNote() {
+        let u = UsageSnapshot(weekly: LimitWindow(usedPercent: 9), fetchedAt: now)
+        XCTAssertEqual(titles(build(u)).first, "주간 한도 9%")
+    }
+
     func testNoFableHidesThatLine() {
         var u = full; u.fable = nil
         XCTAssertFalse(titles(build(u)).contains { $0.hasPrefix("Fable") })
@@ -158,6 +169,12 @@ final class StatusItemRendererTests: XCTestCase {
         var noFive = full; noFive.fiveHour = nil
         XCTAssertEqual(R.leadingElements(usage: noFive, auth: .signedIn, now: now), [.bar(fraction: 1, tone: .critical)])
         XCTAssertEqual(R.leadingElements(usage: nil, auth: .signedIn, now: now), [.text("–", .label)])
+        // 활성 5시간 창 없음(resetsAt == nil): 남은시간 자리 "–", 5h 바는 0% 유지
+        let inactive = UsageSnapshot(
+            fiveHour: LimitWindow(usedPercent: 0, resetsAt: nil), weekly: LimitWindow(usedPercent: 5), fetchedAt: now)
+        XCTAssertEqual(R.leadingElements(usage: inactive, auth: .signedIn, now: now), [
+            .text("–", .label), .bar(fraction: 0, tone: .normal), .bar(fraction: 0.05, tone: .normal),
+        ])
         XCTAssertEqual(R.leadingElements(usage: full, auth: .signedOut, now: now), [.text("로그인 필요", .label)])
         XCTAssertEqual(R.leadingElements(usage: full, auth: .expired, now: now), [.text("다시 로그인 필요", .label)])
     }

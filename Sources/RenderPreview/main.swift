@@ -41,8 +41,13 @@ warnOnly.weekly = win(79.9, in: 5 * 86400)
 var minimal = UsageSnapshot(weekly: win(10, in: 6 * 86400), fetchedAt: now)
 minimal.credit = nil
 
+// 실제 응답 형태(Max 5x): 활성 5시간 창 없음, 주간 5%, Fable/크레딧/티켓 없음
+let fiveHourInactive = UsageSnapshot(
+    fiveHour: LimitWindow(usedPercent: 0, resetsAt: nil), weekly: win(5, in: 6 * 86400 + 4 * h), fetchedAt: now)
+
 let cases: [Case] = [
     Case(name: "five-hour", usage: full, sessions: counts, auth: .signedIn),
+    Case(name: "five-hour-inactive", usage: fiveHourInactive, sessions: counts, auth: .signedIn),
     Case(name: "no-five-hour", usage: noFive, sessions: counts, auth: .signedIn),
     Case(name: "no-fable", usage: noFable, sessions: counts, auth: .signedIn),
     Case(name: "sessions-zero", usage: full, sessions: SessionCounts(active: 0, waiting: 0, idle: 0), auth: .signedIn),

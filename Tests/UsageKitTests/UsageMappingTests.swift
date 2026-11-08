@@ -26,7 +26,7 @@ final class UsageMappingTests: XCTestCase {
         XCTAssertEqual(s.credit, CreditUsage(used: 1234.5, total: 5000))
         XCTAssertNil(s.resetTickets)
         XCTAssertEqual(s.fetchedAt, fixedNow)
-        XCTAssertEqual(r.unmappedKeys, ["seven_day_opus", "seven_day_sonnet"])
+        XCTAssertEqual(r.unmappedKeys, ["seven_day_sonnet"]) // seven_day_opus 는 null 이라 세지 않음
     }
 
     func testNoFiveHourPlan() throws {

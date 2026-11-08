@@ -70,7 +70,7 @@ public final class MenuBuilder {
         }
         guard let usage else { return [infoItem("사용량 불러오는 중…")] }
         var items: [NSMenuItem] = []
-        if let w = usage.fiveHour { items.append(infoItem(limitLine("5시간 한도", w, now))) }
+        if let w = usage.fiveHour { items.append(infoItem(limitLine("5시간 한도", w, now, noResetNote: "활성 창 없음"))) }
         if let w = usage.weekly { items.append(infoItem(limitLine("주간 한도", w, now))) }
         if let w = usage.fable { items.append(infoItem(limitLine("Fable 한도", w, now))) }
         return items
@@ -137,9 +137,14 @@ public final class MenuBuilder {
 
     // MARK: - 항목 헬퍼
 
-    func limitLine(_ name: String, _ w: LimitWindow, _ now: Date) -> String {
+    /// `noResetNote`: resetsAt 이 없을 때 꼬리로 붙일 문구(예: 5시간 창이 아직 시작되지 않음).
+    func limitLine(_ name: String, _ w: LimitWindow, _ now: Date, noResetNote: String? = nil) -> String {
         var s = "\(name) \(Int(w.usedPercent.rounded()))%"
-        if let phrase = TimeFormat.remainingPhrase(until: w.resetsAt, now: now) { s += " · \(phrase)" }
+        if let phrase = TimeFormat.remainingPhrase(until: w.resetsAt, now: now) {
+            s += " · \(phrase)"
+        } else if let noResetNote {
+            s += " · \(noResetNote)"
+        }
         return s
     }
 
