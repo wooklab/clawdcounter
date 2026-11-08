@@ -94,11 +94,7 @@ public final class MenuBuilder {
     }
 
     private func sessionSection(_ s: SessionCounts) -> [NSMenuItem] {
-        [
-            dotItem("●", color: .systemGreen, label: "활성 \(s.active)"),
-            dotItem("●", color: .systemYellow, label: "응답대기 \(s.waiting)"),
-            dotItem("○", color: .labelColor, label: "비활성 \(s.idle)"),
-        ]
+        [Self.sessionItem(s)]
     }
 
     private func settingsSection(auth: AuthState, target: MenuTarget) -> [NSMenuItem] {
@@ -150,17 +146,12 @@ public final class MenuBuilder {
         return item
     }
 
-    private func dotItem(_ dot: String, color: NSColor, label: String) -> NSMenuItem {
-        let title = "\(dot) \(label)"
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+    /// 세션 한 줄: 커스텀 뷰 행. title/접근성에는 평문을 넣는다. 세 항목은 0 이어도 항상 표시한다.
+    static func sessionItem(_ s: SessionCounts) -> NSMenuItem {
+        let item = NSMenuItem(title: SessionRowView.plainText(s), action: nil, keyEquivalent: "")
         item.isEnabled = false
-        let font = NSFont.menuFont(ofSize: 0)
-        let attr = NSMutableAttributedString(
-            string: title,
-            attributes: [.foregroundColor: NSColor.labelColor, .font: font]
-        )
-        attr.addAttribute(.foregroundColor, value: color, range: NSRange(location: 0, length: dot.utf16.count))
-        item.attributedTitle = attr
+        item.view = SessionRowView(counts: s)
+        item.setAccessibilityLabel(SessionRowView.accessibilityText(s))
         return item
     }
 

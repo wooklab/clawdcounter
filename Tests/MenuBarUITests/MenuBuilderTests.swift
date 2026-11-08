@@ -47,7 +47,7 @@ final class MenuBuilderTests: XCTestCase {
             "---",
             "세션 초기화 티켓 2장",
             "---",
-            "● 활성 2", "● 응답대기 1", "○ 비활성 4",
+            "활성 2 · 응답대기 1 · 비활성 4",
             "---",
             "로그아웃", "설정…",
             "---",
@@ -95,12 +95,12 @@ final class MenuBuilderTests: XCTestCase {
 
     func testMinimalUsageOnlyWeekly() {
         let u = UsageSnapshot(weekly: win(10, 86400), fetchedAt: now)
-        XCTAssertEqual(titles(build(u)).prefix(3), ["주간 한도 10% (1일)", "---", "● 활성 2"])
+        XCTAssertEqual(titles(build(u)).prefix(3), ["주간 한도 10% (1일)", "---", "활성 2 · 응답대기 1 · 비활성 4"])
     }
 
     func testSignedOutHidesUsageKeepsSessionsAndLogin() {
         let t = titles(build(full, auth: .signedOut))
-        XCTAssertEqual(t, ["Claude 로그인이 필요합니다", "---", "● 활성 2", "● 응답대기 1", "○ 비활성 4", "---", "Claude 로그인", "설정…", "---", "종료"])
+        XCTAssertEqual(t, ["Claude 로그인이 필요합니다", "---", "활성 2 · 응답대기 1 · 비활성 4", "---", "Claude 로그인", "설정…", "---", "종료"])
     }
 
     func testAuthItemTitles() {
@@ -118,7 +118,72 @@ final class MenuBuilderTests: XCTestCase {
 
     func testSessionsZeroStillShown() {
         let m = MenuBuilder(actions: nil).buildMenu(usage: nil, sessions: SessionCounts(active: 0, waiting: 0, idle: 0), auth: .signedIn, now: now)
-        XCTAssertTrue(titles(m).contains("● 활성 0"))
+        XCTAssertTrue(titles(m).contains("활성 0 · 응답대기 0 · 비활성 0"))
+    }
+
+    // MARK: - 세션 한 줄
+
+    func sessionItems(_ menu: NSMenu) -> [NSMenuItem] {
+        menu.items.filter { $0.title.contains("응답대기") }
+    }
+
+    func testSessionSectionIsSingleItemWithTitleAndAccessibility() {
+        let menu = build(full)
+        let items = sessionItems(menu)
+        XCTAssertEqual(items.count, 1)
+        let item = items[0]
+        XCTAssertEqual(item.title, "활성 2 · 응답대기 1 · 비활성 4")
+        XCTAssertEqual(item.accessibilityLabel(), "활성 세션 2개, 응답대기 세션 1개, 비활성 세션 4개")
+        XCTAssertFalse(item.isEnabled)
+        // 세션 구획은 구분선 사이에 항목 1개만 있다
+        let i = menu.items.firstIndex(of: item)!
+        XCTAssertTrue(menu.items[i - 1].isSeparatorItem)
+        XCTAssertTrue(menu.items[i + 1].isSeparatorItem)
+    }
+
+    func testSessionLineViewTextAndColors() {
+        let item = sessionItems(build(full))[0]
+        XCTAssertNil(item.attributedTitle) // 화면에는 view 만 쓴다 (attributedTitle 은 title 을 바꿈)
+        let row = item.view as! SessionRowView
+        let attr = row.attributed
+        XCTAssertEqual(attr.string, "● 활성 2   ● 응답대기 1   ○ 비활성 4")
+        func color(of needle: String) -> NSColor? {
+            let r = (attr.string as NSString).range(of: needle)
+            return attr.attribute(.foregroundColor, at: r.location, effectiveRange: nil) as? NSColor
+        }
+        XCTAssertEqual(color(of: "● 활성"), .systemGreen)
+        XCTAssertEqual(color(of: "● 응답대기"), .systemYellow)
+        XCTAssertEqual(color(of: "○"), .labelColor)
+        XCTAssertEqual(color(of: "활성 2"), .labelColor)
+        XCTAssertEqual(color(of: "응답대기 1"), .labelColor)
+        XCTAssertEqual(color(of: "비활성 4"), .labelColor)
+        XCTAssertEqual(row.accessibilityLabel(), "활성 세션 2개, 응답대기 세션 1개, 비활성 세션 4개")
+    }
+
+    func testSessionRowDrawsInBothAppearances() {
+        let row = sessionItems(build(full))[0].view as! SessionRowView
+        for name in [NSAppearance.Name.aqua, .darkAqua] {
+            row.appearance = NSAppearance(named: name)
+            let rep = row.bitmapImageRepForCachingDisplay(in: row.bounds)!
+            row.cacheDisplay(in: row.bounds, to: rep)
+            XCTAssertGreaterThan(rep.pixelsWide, 0)
+        }
+    }
+
+    func testSessionLineShowsZeroValues() {
+        let counts = SessionCounts(active: 3, waiting: 0, idle: 0)
+        let menu = MenuBuilder(actions: nil).buildMenu(usage: nil, sessions: counts, auth: .signedIn, now: now)
+        let item = sessionItems(menu)[0]
+        XCTAssertEqual(item.title, "활성 3 · 응답대기 0 · 비활성 0")
+        XCTAssertEqual((item.view as! SessionRowView).attributed.string, "● 활성 3   ● 응답대기 0   ○ 비활성 0")
+        XCTAssertEqual(item.accessibilityLabel(), "활성 세션 3개, 응답대기 세션 0개, 비활성 세션 0개")
+    }
+
+    func testSessionLineVisibleWhenSignedOutExpiredLoading() {
+        for auth in [AuthState.signedOut, .expired, .signingIn] {
+            XCTAssertEqual(sessionItems(build(full, auth: auth)).count, 1, "\(auth)")
+        }
+        XCTAssertEqual(sessionItems(build(nil)).count, 1)
     }
 
     func testSettingsItemHasNoSubmenuAndFiresOpenSettings() {
@@ -229,7 +294,7 @@ final class MenuBuilderTests: XCTestCase {
 
     func testSignedOutAndExpiredHideLimitRows() {
         for auth in [AuthState.signedOut, .expired, .signingIn] {
-            XCTAssertTrue(build(full, auth: auth).items.allSatisfy { $0.view == nil }, "\(auth)")
+            XCTAssertTrue(build(full, auth: auth).items.allSatisfy { $0.view == nil || $0.view is SessionRowView }, "\(auth)")
         }
     }
 

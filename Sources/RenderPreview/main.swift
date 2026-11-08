@@ -202,6 +202,38 @@ for mode in Mode.allCases {
     }
 }
 
+// 세션 한 줄: 세션 행 뷰를 배경 위에 캐시 렌더 (build/preview/menu-sessions-<case>-<light|dark>.png)
+@MainActor func sessionsPNG(_ s: SessionCounts, mode: Mode) -> Data {
+    let menu = MenuBuilder(actions: nil).buildMenu(usage: nil, sessions: s, auth: .signedOut, now: now)
+    let v = menu.items.first { $0.title.contains("응답대기") }!.view!
+    let width = max(v.frame.width, 260), height = v.frame.height
+    v.frame.size.width = width
+    let root = PreviewBackdrop(frame: v.bounds)
+    root.color = mode.background
+    root.appearance = mode.appearance
+    root.addSubview(v)
+    let rep = NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: Int(width) * scale, pixelsHigh: Int(height) * scale,
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    rep.size = v.bounds.size
+    root.cacheDisplay(in: root.bounds, to: rep)
+    return rep.representation(using: .png, properties: [:])!
+}
+
+let sessionCases: [(String, SessionCounts)] = [
+    ("2-1-4", SessionCounts(active: 2, waiting: 1, idle: 4)),
+    ("0-0-0", SessionCounts(active: 0, waiting: 0, idle: 0)),
+    ("12-10-25", SessionCounts(active: 12, waiting: 10, idle: 25)),
+]
+for mode in Mode.allCases {
+    for (name, s) in sessionCases {
+        let url = outDir.appendingPathComponent("menu-sessions-\(name)-\(mode.rawValue).png")
+        try sessionsPNG(s, mode: mode).write(to: url)
+        written.append(url.path)
+    }
+}
+
 // 메뉴 구조 덤프
 @MainActor final class NoopActions: MenuActions {
     func login() {}
