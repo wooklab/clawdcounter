@@ -32,7 +32,9 @@ private func deadPid() throws -> Int {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/true")
     try p.run()
-    p.waitUntilExit()
+    // waitUntilExit()는 async 테스트(협력 스레드)에서 깨어나지 못해 무한 대기할 수 있다 → 상한 있는 폴링.
+    let deadline = Date().addingTimeInterval(5)
+    while p.isRunning, Date() < deadline { usleep(10_000) }
     return Int(p.processIdentifier)
 }
 
@@ -46,6 +48,11 @@ private func write(
     if let procStart { obj["procStart"] = procStart }
     let data = try JSONSerialization.data(withJSONObject: obj)
     try data.write(to: dir.appendingPathComponent("\(pid).json"), options: atomic ? .atomic : [])
+}
+
+/// 테스트가 실제 `~/.claude/projects` 를 감시/스캔하지 않도록 주입하는 존재하지 않는 경로.
+private func noProjectsDir() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent("sessionskit-noprojects-\(UUID().uuidString)", isDirectory: true)
 }
 
 private func waitUntil(timeout: TimeInterval = 5, _ cond: () -> Bool) async -> Bool {
@@ -75,7 +82,7 @@ private func formatProcStart(_ date: Date, utc: Bool) -> String {
 
 final class SessionMonitorTests: XCTestCase {
     private func monitor(_ dir: URL, mapping: StatusMapping = .default) -> SessionMonitor {
-        SessionMonitor(directory: dir, statusMapping: mapping, debounce: 0.1, rescanInterval: 60)
+        SessionMonitor(directory: dir, projectsDirectory: noProjectsDir(), statusMapping: mapping, debounce: 0.1, rescanInterval: 60)
     }
 
     private func collect(_ m: SessionMonitor) -> (Emissions, Task<Void, Never>) {
@@ -246,12 +253,15 @@ final class SessionMonitorTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let p = try spawnSleeper()
         try write(dir, pid: Int(p.processIdentifier), status: "busy")
-        let m = SessionMonitor(directory: dir, statusMapping: .default, debounce: 0.1, rescanInterval: 0.3)
+        let m = SessionMonitor(directory: dir, projectsDirectory: noProjectsDir(), statusMapping: .default, debounce: 0.1, rescanInterval: 0.3)
         let (e, task) = collect(m)
         m.start(); defer { m.stop(); task.cancel() }
         var ok = await waitUntil { e.latest?.numbers == [1, 0, 0] }
         XCTAssertTrue(ok, "alive: \(e.all)")
-        p.terminate(); p.waitUntilExit() // 파일 변경 없이 프로세스만 종료
+        p.terminate() // 파일 변경 없이 프로세스만 종료
+        // waitUntilExit()는 협력 스레드에서 종료 알림을 못 받아 영구 대기한 적이 있다(간헐 행) → 상한 있는 폴링.
+        let exited = await waitUntil { !p.isRunning }
+        XCTAssertTrue(exited, "sleeper did not exit")
         ok = await waitUntil { e.latest?.numbers == [0, 0, 0] }
         XCTAssertTrue(ok, "after death: \(e.all)")
     }
@@ -319,7 +329,7 @@ final class SessionMonitorTests: XCTestCase {
 
 final class SessionNamesTests: XCTestCase {
     private func monitor(_ dir: URL) -> SessionMonitor {
-        SessionMonitor(directory: dir, statusMapping: .default, debounce: 0.1, rescanInterval: 60)
+        SessionMonitor(directory: dir, projectsDirectory: noProjectsDir(), statusMapping: .default, debounce: 0.1, rescanInterval: 60)
     }
 
     func testDisplayNameFallbackRules() {
