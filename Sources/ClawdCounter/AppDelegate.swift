@@ -115,7 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAc
 
         if model.usageStale && model.authState == .signedIn {
             let failure = NSMenuItem(
-                title: model.usage == nil ? "사용량 갱신 실패" : "마지막 갱신 실패 · 이전 값 표시",
+                title: L10n.tr(model.usage == nil ? .usageRefreshFailed : .lastRefreshFailed),
                 action: nil, keyEquivalent: ""
             )
             failure.isEnabled = false

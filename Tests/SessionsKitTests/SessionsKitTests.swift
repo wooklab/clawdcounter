@@ -341,9 +341,10 @@ final class SessionNamesTests: XCTestCase {
         XCTAssertEqual(M.displayName(name: "", cwd: "/a/proj"), "proj")
         XCTAssertEqual(M.displayName(name: "   ", cwd: "/a/proj/"), "proj")
         XCTAssertEqual(M.displayName(name: nil, cwd: "/a/proj"), "proj")
-        XCTAssertEqual(M.displayName(name: nil, cwd: "/"), "이름 없음")
-        XCTAssertEqual(M.displayName(name: nil, cwd: ""), "이름 없음")
-        XCTAssertEqual(M.displayName(name: nil, cwd: nil), "이름 없음")
+        // 이름을 정할 수 없으면 nil: UI 가 `.unnamed` 대체 표시명을 언어별로 그린다.
+        XCTAssertNil(M.displayName(name: nil, cwd: "/"))
+        XCTAssertNil(M.displayName(name: nil, cwd: ""))
+        XCTAssertNil(M.displayName(name: nil, cwd: nil))
     }
 
     func testNamesGroupedByStatusSortedWithFallbacks() async throws {
@@ -368,9 +369,8 @@ final class SessionNamesTests: XCTestCase {
         let latest = try XCTUnwrap(e.latest)
         XCTAssertEqual(latest.activeNames, ["Alpha", "beta"])
         XCTAssertEqual(latest.waitingNames, ["clawdcounter"])
-        XCTAssertEqual(latest.idleNames, ["세션 2", "세션 10", "이름 없음"].sorted {
-            $0.compare($1, options: [.caseInsensitive, .numeric]) == .orderedAscending
-        })
+        XCTAssertEqual(latest.idleNames, ["세션 2", "세션 10", ""]) // 이름 없는 세션은 맨 뒤
+        XCTAssertEqual(latest.idleSessions.map(\.placeholder), [nil, nil, .unnamed])
     }
 
     func testEqualNamesOrderedByPid() async throws {
@@ -610,7 +610,8 @@ final class SubagentCountingTests: XCTestCase {
         m.start(); defer { m.stop(); task.cancel() }
         let ok = await waitUntil { e.latest?.numbers == [3, 0, 1] }
         XCTAssertTrue(ok, "emitted: \(e.all)")
-        XCTAssertEqual(e.latest?.activeNames, Array(repeating: "↳ 서브에이전트", count: 3))
+        XCTAssertEqual(e.latest?.activeSessions.map(\.placeholder), Array(repeating: .subagent, count: 3))
+        XCTAssertEqual(e.latest?.activeNames, Array(repeating: "", count: 3))
     }
 
     func testNestedSubagentIncluded() async throws {
@@ -712,8 +713,8 @@ final class SubagentCountingTests: XCTestCase {
 
     func testSubagentNameRules() {
         XCTAssertEqual(SessionMonitor.subagentName(description: " 작업 "), "↳ 작업")
-        XCTAssertEqual(SessionMonitor.subagentName(description: ""), "↳ 서브에이전트")
-        XCTAssertEqual(SessionMonitor.subagentName(description: nil), "↳ 서브에이전트")
+        XCTAssertNil(SessionMonitor.subagentName(description: ""))
+        XCTAssertNil(SessionMonitor.subagentName(description: nil))
     }
 }
 

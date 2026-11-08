@@ -16,14 +16,14 @@ struct LimitRowContent: Equatable {
     var accessibilityText: String
 
     /// `noResetNote`: resetsAt 이 없을 때 꼬리로 붙일 문구(예: 5시간 창이 아직 시작되지 않음).
-    init(label: String, window w: LimitWindow, now: Date, noResetNote: String? = nil) {
+    init(label: String, window w: LimitWindow, now: Date, noResetNote: String? = nil, lang: Language = .current) {
         let pct = Int(w.usedPercent.rounded())
         var tail: String?       // 괄호 안 문구
         var spoken: String?     // 접근성 꼬리
         if let resetsAt = w.resetsAt {
             let seconds = resetsAt.timeIntervalSince(now)
-            tail = TimeFormat.remainingLong(seconds: seconds)
-            spoken = TimeFormat.remainingPhrase(until: resetsAt, now: now)
+            tail = TimeFormat.remainingLong(seconds: seconds, lang: lang)
+            spoken = TimeFormat.remainingPhrase(until: resetsAt, now: now, lang: lang)
         } else if let noResetNote {
             tail = noResetNote
             spoken = noResetNote
@@ -34,7 +34,7 @@ struct LimitRowContent: Equatable {
         self.fraction = min(1, max(0, w.usedPercent / 100))
         self.level = UsageLevel.level(forPercent: w.usedPercent)
         self.plainText = "\(label) \(pct)%" + (tail.map { " (\($0))" } ?? "")
-        self.accessibilityText = "\(label) \(pct)퍼센트" + (spoken.map { " \($0)" } ?? "")
+        self.accessibilityText = L10n.tr(.limitSpoken(label: label, percent: pct), lang: lang) + (spoken.map { " \($0)" } ?? "")
     }
 }
 

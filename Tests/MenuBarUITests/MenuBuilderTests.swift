@@ -41,7 +41,7 @@ final class MenuBuilderTests: XCTestCase {
 
     func build(_ usage: UsageSnapshot?, auth: AuthState = .signedIn, settings: MenuSettings = MenuSettings(), spy: Spy = Spy()) -> NSMenu {
         // 빌더를 지역변수로만 쓰고 버려도 클릭이 동작해야 한다.
-        MenuBuilder(actions: spy).buildMenu(usage: usage, sessions: counts, auth: auth, settings: settings, now: now)
+        MenuBuilder(actions: spy).buildMenu(usage: usage, sessions: counts, auth: auth, settings: settings, now: now, lang: .ko)
     }
 
     func titles(_ menu: NSMenu) -> [String] { menu.items.map { $0.isSeparatorItem ? "---" : $0.title } }
@@ -128,7 +128,7 @@ final class MenuBuilderTests: XCTestCase {
     }
 
     func testSessionsZeroStillShown() {
-        let m = MenuBuilder(actions: nil).buildMenu(usage: nil, sessions: SessionCounts(active: 0, waiting: 0, idle: 0), auth: .signedIn, now: now)
+        let m = MenuBuilder(actions: nil).buildMenu(usage: nil, sessions: SessionCounts(active: 0, waiting: 0, idle: 0), auth: .signedIn, now: now, lang: .ko)
         XCTAssertEqual(sessionTitles(m), ["● 활성 0", "● 응답대기 0", "○ 비활성 0"])
     }
 
@@ -143,7 +143,7 @@ final class MenuBuilderTests: XCTestCase {
     func sessionTitles(_ menu: NSMenu) -> [String] { sessionItems(menu).map(\.title) }
 
     func buildSessions(_ s: SessionCounts, auth: AuthState = .signedIn) -> NSMenu {
-        MenuBuilder(actions: nil).buildMenu(usage: nil, sessions: s, auth: auth, now: now)
+        MenuBuilder(actions: nil).buildMenu(usage: nil, sessions: s, auth: auth, now: now, lang: .ko)
     }
 
     func names(_ prefix: String, _ n: Int) -> [String] { (1...max(n, 1)).prefix(n).map { "\(prefix)\($0)" } }
@@ -216,7 +216,7 @@ final class MenuBuilderTests: XCTestCase {
             active: 3, waiting: 0, idle: 0,
             activeSessions: [parent, desktop, sub], waitingSessions: [], idleSessions: [])
         // 빌더를 버려도(actions 는 weak, spy 는 지역변수가 유지) 클릭이 전달되어야 한다.
-        let menu = MenuBuilder(actions: spy).buildMenu(usage: nil, sessions: s, auth: .signedIn, now: now)
+        let menu = MenuBuilder(actions: spy).buildMenu(usage: nil, sessions: s, auth: .signedIn, now: now, lang: .ko)
         let names = sessionItems(menu).filter { !isHeader($0) }
         XCTAssertEqual(names.map(\.title), ["    · 부모", "    · 데스크탑", "    · ↳ 작업"])
         names.forEach(click)
@@ -226,7 +226,7 @@ final class MenuBuilderTests: XCTestCase {
 
     func testSessionNameClickWithoutActionsDoesNothing() {
         let s = SessionCounts(active: 1, waiting: 0, idle: 0, activeNames: ["a"])
-        let menu = MenuBuilder(actions: nil).buildMenu(usage: nil, sessions: s, auth: .signedIn, now: now)
+        let menu = MenuBuilder(actions: nil).buildMenu(usage: nil, sessions: s, auth: .signedIn, now: now, lang: .ko)
         click(sessionItems(menu).first { $0.title == "    · a" }!) // 크래시 없음
     }
 
@@ -483,8 +483,8 @@ final class StatusItemRendererTests: XCTestCase {
         XCTAssertEqual(Array(R.leadingElements(usage: mixed, auth: .signedIn, now: now).dropFirst()), [
             .bar(fraction: 0.85, level: .orange), .bar(fraction: 0.3, level: .green),
         ])
-        XCTAssertEqual(R.leadingElements(usage: full, auth: .signedOut, now: now), [.text("로그인 필요", .label)])
-        XCTAssertEqual(R.leadingElements(usage: full, auth: .expired, now: now), [.text("다시 로그인 필요", .label)])
+        XCTAssertEqual(R.leadingElements(usage: full, auth: .signedOut, now: now, lang: .ko), [.text("로그인 필요", .label)])
+        XCTAssertEqual(R.leadingElements(usage: full, auth: .expired, now: now, lang: .ko), [.text("다시 로그인 필요", .label)])
     }
 
     @MainActor

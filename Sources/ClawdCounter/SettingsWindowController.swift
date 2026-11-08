@@ -1,9 +1,10 @@
 import AppKit
+import CoreModels
 import MenuBarUI
 import ServiceManagement
 import os
 
-/// 설정 창(로그인 시 자동 실행, 사용량 갱신 주기). 창은 한 번만 만들고 닫아도 해제하지 않아 재오픈에 재사용한다.
+/// 설정 창(로그인 시 자동 실행, 사용량 갱신 주기, 언어). 창은 한 번만 만들고 닫아도 해제하지 않아 재오픈에 재사용한다.
 @MainActor
 final class SettingsWindowController: NSObject {
     private let log = Logger(subsystem: "clawdcounter", category: "Settings")
@@ -11,9 +12,14 @@ final class SettingsWindowController: NSObject {
     private let onRefreshIntervalChanged: () -> Void
 
     let window: NSWindow
-    private let launchCheckbox = NSButton(checkboxWithTitle: "로그인 시 자동 실행", target: nil, action: nil)
+    private let launchCheckbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let messageLabel = NSTextField(labelWithString: "")
+    /// 언어를 바꿨을 때 다시 그릴 수 있도록 문구 대신 키를 보관한다.
+    private var message: L10n.Key? { didSet { messageLabel.stringValue = message.map { L10n.tr($0) } ?? "" } }
+    private let intervalLabel = NSTextField(labelWithString: "")
     private let intervalPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let languageLabel = NSTextField(labelWithString: "")
+    private let languagePopup = NSPopUpButton(frame: .zero, pullsDown: false)
 
     init(model: AppModel, onRefreshIntervalChanged: @escaping () -> Void) {
         self.model = model
@@ -24,9 +30,9 @@ final class SettingsWindowController: NSObject {
         )
         super.init()
 
-        window.title = "ClawdCounter 설정"
         window.isReleasedWhenClosed = false
         buildContent()
+        applyTexts()
         syncControls()
     }
 
@@ -52,38 +58,58 @@ final class SettingsWindowController: NSObject {
         messageLabel.lineBreakMode = .byTruncatingTail
         messageLabel.frame = NSRect(x: 42, y: 118, width: 294, height: 16)
 
-        let intervalLabel = NSTextField(labelWithString: "사용량 갱신 주기")
-        intervalLabel.frame = NSRect(x: 24, y: 76, width: 140, height: 20)
+        intervalLabel.frame = NSRect(x: 24, y: 76, width: 200, height: 20)
 
         for minutes in MenuBuilder.refreshIntervalOptions {
-            intervalPopup.addItem(withTitle: "\(minutes)분")
+            intervalPopup.addItem(withTitle: "")
             intervalPopup.lastItem?.tag = minutes
         }
         intervalPopup.target = self
         intervalPopup.action = #selector(intervalChanged)
         intervalPopup.frame = NSRect(x: 236, y: 72, width: 100, height: 26)
 
-        [launchCheckbox, messageLabel, intervalLabel, intervalPopup].forEach(content.addSubview)
+        languageLabel.frame = NSRect(x: 24, y: 36, width: 150, height: 20)
+        for (i, _) in LanguagePreference.allCases.enumerated() {
+            languagePopup.addItem(withTitle: "")
+            languagePopup.lastItem?.tag = i
+        }
+        languagePopup.target = self
+        languagePopup.action = #selector(languageChanged)
+        languagePopup.frame = NSRect(x: 176, y: 32, width: 160, height: 26)
+
+        [launchCheckbox, messageLabel, intervalLabel, intervalPopup, languageLabel, languagePopup].forEach(content.addSubview)
+    }
+
+    /// 현재 언어로 모든 라벨을 다시 쓴다(언어 변경 시 즉시 호출).
+    private func applyTexts() {
+        window.title = L10n.tr(.settingsTitle)
+        launchCheckbox.title = L10n.tr(.launchAtLogin)
+        intervalLabel.stringValue = L10n.tr(.refreshInterval)
+        for item in intervalPopup.itemArray { item.title = L10n.tr(.refreshMinutesOption(item.tag)) }
+        languageLabel.stringValue = L10n.tr(.language)
+        for (i, pref) in LanguagePreference.allCases.enumerated() { languagePopup.item(at: i)?.title = pref.displayName() }
+        messageLabel.stringValue = message.map { L10n.tr($0) } ?? ""
     }
 
     private func syncControls() {
         launchCheckbox.state = SMAppService.mainApp.status == .enabled ? .on : .off
         intervalPopup.selectItem(withTag: model.settings.refreshMinutes)
+        languagePopup.selectItem(withTag: LanguagePreference.allCases.firstIndex(of: model.languagePreference) ?? 0)
     }
 
     // MARK: - 동작
 
     @objc private func launchAtLoginToggled() {
         let enable = launchCheckbox.state == .on
-        messageLabel.stringValue = ""
+        message = nil
         do {
             if enable { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
         } catch {
             log.error("launch at login change failed: \(error.localizedDescription, privacy: .public)")
-            messageLabel.stringValue = "자동 실행 설정에 실패했습니다"
+            message = .launchAtLoginFailed
         }
         if enable, SMAppService.mainApp.status == .requiresApproval {
-            messageLabel.stringValue = "시스템 설정의 로그인 항목에서 승인이 필요합니다"
+            message = .loginItemApprovalRequired
         }
         launchCheckbox.state = SMAppService.mainApp.status == .enabled ? .on : .off // 실제 상태로 되돌림
     }
@@ -91,5 +117,12 @@ final class SettingsWindowController: NSObject {
     @objc private func intervalChanged() {
         model.setRefreshMinutes(intervalPopup.selectedTag())
         onRefreshIntervalChanged()
+    }
+
+    @objc private func languageChanged() {
+        let index = languagePopup.selectedTag()
+        guard LanguagePreference.allCases.indices.contains(index) else { return }
+        model.setLanguagePreference(LanguagePreference.allCases[index]) // 상태바는 model.onChange 로 다시 그려진다
+        applyTexts()
     }
 }

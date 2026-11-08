@@ -6,7 +6,7 @@ ClawdCounter는 SwiftPM 패키지(Swift 6, macOS 14+)로, 라이브러리 타깃
 
 | 모듈 | 종류 | 책임 | 의존 |
 |---|---|---|---|
-| `CoreModels` | 라이브러리 | 공유 값 타입(`UsageSnapshot`, `LimitWindow`, `CreditUsage`, `SessionCounts`, `SessionRef`, `AuthState`), 프로토콜(`TokenProviding`, `AuthManaging`, `UsageProviding`, `SessionMonitoring`), 멀티캐스트 헬퍼 `Broadcaster` | 없음 |
+| `CoreModels` | 라이브러리 | 공유 값 타입(`UsageSnapshot`, `LimitWindow`, `CreditUsage`, `SessionCounts`, `SessionRef`, `AuthState`), 프로토콜(`TokenProviding`, `AuthManaging`, `UsageProviding`, `SessionMonitoring`), 멀티캐스트 헬퍼 `Broadcaster`, 다국어 문자열 테이블 `L10n` | 없음 |
 | `SessionsKit` | 라이브러리 | `~/.claude/sessions` 감시와 상태 분류, 서브에이전트 판정, 프로세스 생존/조상 탐색 | `CoreModels` |
 | `AuthKit` | 라이브러리 | OAuth(PKCE) 로그인, 로컬 콜백 서버, 토큰 갱신/폐기, 키체인 저장 | `CoreModels` |
 | `UsageKit` | 라이브러리 | 사용량 API 호출, 응답 -> `UsageSnapshot` 매핑, 진단용 프로브 | `CoreModels` |
@@ -59,7 +59,7 @@ OAuth 로그인 ─> 키체인(앱 전용) ─> AuthManager ─> UsageClient ─
 - `kill(pid, 0)`으로 프로세스가 살아 있음
 - 파일의 `procStart`가 있으면 커널이 기록한 실제 시작 시각과 일치(PID 재사용 방지). 파일 값이 UTC인지 로컬 시간인지 단정하지 못해 두 해석 중 하나라도 맞으면 일치로 봅니다.
 
-세션명은 `name` -> `cwd`의 마지막 경로 요소 -> `이름 없음` 순으로 정합니다.
+세션명은 `name` -> `cwd`의 마지막 경로 요소 -> `이름 없음` 순으로 정합니다. `이름 없음`은 문자열이 아니라 `SessionRef.placeholder`(`.unnamed`)로 넘기고 `MenuBuilder`가 표시 언어로 그리며, 목록에서는 맨 뒤에 둡니다.
 
 ### 서브에이전트
 
@@ -68,7 +68,7 @@ OAuth 로그인 ─> 키체인(앱 전용) ─> AuthManager ─> UsageClient ─
   - `meta.json`의 `finished`가 `true`가 아님
   - `meta.json`과 짝인 `agent-<id>.jsonl` 중 더 늦은 수정 시각이 최근 10분(600초) 이내 (비정상 종료로 `finished`가 안 붙은 잔존물 제외)
 - `jsonl`은 수정 시각만 보고 내용은 읽지 않습니다. `meta.json`은 `description`과 `finished`만 사용합니다.
-- 표시명은 `↳ <description>`(비어 있으면 `↳ 서브에이전트`)이며, 클릭 시에는 부모 세션의 앱을 앞으로 가져옵니다.
+- 표시명은 `↳ <description>`(비어 있으면 `placeholder == .subagent`로 넘겨 UI가 `↳ 서브에이전트`를 표시 언어로 그림)이며, 클릭 시에는 부모 세션의 앱을 앞으로 가져옵니다.
 
 ### 감시 방식
 
@@ -113,6 +113,19 @@ Claude Code에서 확인한 **비공식** 엔드포인트이며 언제든 바뀔
 - **갱신(refresh) 직렬화**: `AuthManager`는 actor이고, 만료 60초 전부터 갱신합니다. 동시에 여러 호출이 와도 진행 중인 갱신 Task 하나를 공유해 요청을 한 번만 보냅니다. `logout`/새 로그인마다 증가하는 세대 번호로, 그 이전에 시작된 갱신/로그인 결과가 뒤늦게 반영되는 것을 막습니다.
 - **만료**: 갱신이 `invalid_grant`(HTTP 400/401)이면 토큰을 지우고 `expired` 상태로 전환합니다. 로그인 진행 중에 발생하면 상태/저장소를 건드리지 않고 로그인이 끝날 때 정리합니다.
 - **로그아웃**: 진행 중인 갱신/로그인을 취소하고 로컬 토큰을 삭제한 뒤 서버에 폐기를 시도합니다(실패 무시).
+
+## 다국어
+
+한국어, 영어, 중국어 간체, 일본어를 지원합니다. `scripts/build_app.sh`가 실행 파일만 번들에 복사하므로 `.lproj`/`Bundle.module` 리소스 대신 코드 기반 문자열 테이블을 씁니다.
+
+- **위치**: `Sources/CoreModels/L10n.swift`. 모든 모듈이 `CoreModels`에 의존하므로 UI뿐 아니라 `AuthError`/`UsageError`의 설명도 같은 테이블을 씁니다.
+- **API**: `L10n.tr(.key, lang: Language = .current)`. 개수·시간·이름처럼 값이 들어가는 문자열은 연관값을 가진 키(`.moreCount(3)`, `.hoursMinutes(3, 20)`)입니다. 메뉴바의 남은 시간 축약형(`2h 13m`)은 언어와 무관하게 그대로 씁니다.
+- **키 추가**: `L10n.Key`에 case를 추가하고 `L10n.table(_:)`의 `switch`에 `T(ko:en:zhHans:ja:)`를 적습니다. `switch`는 `default` 없이 모든 키를 다루고 `T`는 4개 언어 인자가 모두 필수라, 키나 번역이 하나라도 빠지면 컴파일 오류가 납니다. 영어는 복수형 처리를 피하도록 `3h 20m`, `+3 more` 같은 축약형을 씁니다. 용어는 문서와 같은 용어집을 따릅니다.
+- **비 UI 모듈**: Kit 모듈은 표시 문자열을 만들지 않고 값(예: `SessionRef.placeholder`)이나 오류 case만 넘기며, 실제 문자열은 표시할 때 정합니다.
+- **언어 결정**: 설정 창의 "언어" 팝업(시스템 설정 / 한국어 / English / 简体中文 / 日本語, 언어 이름은 항상 자기 문자로 표기)에서 고르며, 값은 UserDefaults `language`(`system`/`ko`/`en`/`zh-Hans`/`ja`)에 저장합니다. 기본값인 시스템 설정은 `Locale.preferredLanguages`를 앞에서부터 보고 처음 일치하는 언어를 씁니다. 중국어는 간체(`zh-Hans`, 스크립트 없는 `zh-CN` 등)만 일치로 보고 번체(`zh-Hant`, `zh-TW`/`HK`/`MO`)는 건너뜁니다. 일치하는 언어가 없으면 영어입니다.
+- **현재 언어**: `Language.current`는 `OSAllocatedUnfairLock`으로 보호하는 전역 값입니다. 오류 설명이 메인 스레드 밖에서도 읽히기 때문입니다. `AppModel`이 시작할 때와 설정을 바꿀 때 갱신합니다.
+- **즉시 반영**: 언어를 바꾸면 `AppModel.onChange`로 상태바 이미지를 다시 그리고, 설정 창은 라벨과 남아 있는 안내 문구(키로 보관)를 다시 씁니다. 드롭다운 메뉴와 수동 코드 입력창은 열 때마다 새로 만들므로 따로 처리할 것이 없습니다.
+- **테스트**: 전역 언어를 바꾸지 않고 `lang:`을 명시해 언어를 고정합니다(테스트는 병렬로 실행될 수 있음). `swift run RenderPreview`는 `build/preview/<ko|en|zh-Hans|ja>/`에 언어별 PNG와 메뉴 덤프를 만듭니다.
 
 ## 동시성 주의
 

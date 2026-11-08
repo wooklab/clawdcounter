@@ -55,6 +55,14 @@ public struct UsageSnapshot: Equatable, Sendable {
     }
 }
 
+/// 세션명 대체 표시 종류. 실제 문자열은 UI 계층이 `L10n` 으로 그린다.
+public enum SessionNamePlaceholder: Equatable, Sendable {
+    /// `name`·`cwd` 모두 없음("이름 없음").
+    case unnamed
+    /// description 이 빈 서브에이전트("↳ 서브에이전트").
+    case subagent
+}
+
 /// 드롭다운에 나열되는 세션 한 건의 구조화 정보.
 public struct SessionRef: Equatable, Sendable {
     public var name: String
@@ -63,12 +71,18 @@ public struct SessionRef: Equatable, Sendable {
     public var isSubagent: Bool
     /// 서브에이전트일 때 부모 세션의 pid.
     public var parentPid: Int32?
-    public init(name: String, pid: Int32? = nil, entrypoint: String? = nil, isSubagent: Bool = false, parentPid: Int32? = nil) {
+    /// 이름을 정할 수 없을 때의 대체 표시명 종류. nil 이 아니면 `name` 은 비어 있고, UI 가 언어별 문자열로 그린다.
+    public var placeholder: SessionNamePlaceholder?
+    public init(
+        name: String, pid: Int32? = nil, entrypoint: String? = nil, isSubagent: Bool = false, parentPid: Int32? = nil,
+        placeholder: SessionNamePlaceholder? = nil
+    ) {
         self.name = name
         self.pid = pid
         self.entrypoint = entrypoint
         self.isSubagent = isSubagent
         self.parentPid = parentPid
+        self.placeholder = placeholder
     }
 
     /// 앞으로 가져올 앱을 찾는 출발 pid: 서브에이전트는 부모 세션, 그 밖에는 자기 자신.
