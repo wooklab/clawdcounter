@@ -2,7 +2,6 @@ import AppKit
 import AuthKit
 import CoreModels
 import MenuBarUI
-import ServiceManagement
 import SessionsKit
 import UsageKit
 import os
@@ -16,6 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAc
     private let auth = AuthManager()
     private var poller: UsagePoller!
     private lazy var menuBuilder = MenuBuilder(actions: self)
+    private lazy var settingsWindow = SettingsWindowController(
+        model: model, onRefreshIntervalChanged: { [weak self] in self?.poller.reschedule() }
+    )
 
     private var statusItem: NSStatusItem!
     private let menu = NSMenu()
@@ -24,7 +26,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAc
     private var loginTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        model.setLaunchAtLogin(SMAppService.mainApp.status == .enabled)
         model.onChange = { [weak self] in self?.render() }
 
         poller = UsagePoller(
@@ -100,9 +101,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAc
     // MARK: - NSMenuDelegate
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        model.setLaunchAtLogin(SMAppService.mainApp.status == .enabled)
         let built = menuBuilder.buildMenu(
-            usage: model.usage, sessions: model.counts, auth: model.authState, settings: model.settings
+            usage: model.usage, sessions: model.counts, auth: model.authState
         )
         var items = built.items
         built.removeAllItems() // 항목은 한 메뉴에만 속할 수 있다.
@@ -171,17 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAc
         NSApp.terminate(nil)
     }
 
-    func setRefreshInterval(minutes: Int) {
-        model.setRefreshMinutes(minutes)
-        poller.reschedule()
-    }
-
-    func setLaunchAtLogin(_ enabled: Bool) {
-        do {
-            if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-        } catch {
-            log.error("launch at login change failed: \(error.localizedDescription, privacy: .public)")
-        }
-        model.setLaunchAtLogin(SMAppService.mainApp.status == .enabled)
+    func openSettings() {
+        settingsWindow.present()
     }
 }

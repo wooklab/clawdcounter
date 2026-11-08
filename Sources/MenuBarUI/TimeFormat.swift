@@ -16,7 +16,7 @@ public enum TimeFormat {
         return "1분 미만"
     }
 
-    /// 상태바용 짧은 표기. 1일↑ "1d3h", 1시간↑ "2h13m"(분 2자리), 그 외 "45m", 1분 미만 "<1m", 0 이하 "0m".
+    /// 상태바용 짧은 표기. 1일↑ "1d3h", 1시간↑ "2h 13m"(시간·분 사이 공백, 분 2자리), 그 외 "45m", 1분 미만 "<1m", 0 이하 "0m".
     public static func remainingCompact(seconds: TimeInterval) -> String {
         guard seconds > 0 else { return "0m" }
         let total = Int(seconds)
@@ -24,7 +24,7 @@ public enum TimeFormat {
         let hours = (total % 86_400) / 3_600
         let minutes = (total % 3_600) / 60
         if days >= 1 { return "\(days)d\(hours)h" }
-        if total >= 3_600 { return "\(hours)h" + (minutes < 10 ? "0" : "") + "\(minutes)m" }
+        if total >= 3_600 { return "\(hours)h " + (minutes < 10 ? "0" : "") + "\(minutes)m" }
         if minutes >= 1 { return "\(minutes)m" }
         return "<1m"
     }

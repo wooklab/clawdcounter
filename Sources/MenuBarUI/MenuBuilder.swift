@@ -7,11 +7,15 @@ public protocol MenuActions: AnyObject {
     func login()
     func logout()
     func quit()
-    func setRefreshInterval(minutes: Int)
-    func setLaunchAtLogin(_ enabled: Bool)
+    func openSettings()
 }
 
-/// 설정 구획의 체크 표시용 현재 값.
+extension MenuActions {
+    /// 설정 창이 없는 소비자(RenderPreview 등)용 기본 구현.
+    public func openSettings() {}
+}
+
+/// 앱이 보관하는 설정 값. 메뉴 구성에는 쓰이지 않는다(설정 창이 직접 다룸).
 public struct MenuSettings: Equatable, Sendable {
     public var launchAtLogin: Bool
     public var refreshMinutes: Int
@@ -38,7 +42,7 @@ public final class MenuBuilder {
         usage: UsageSnapshot?,
         sessions: SessionCounts,
         auth: AuthState,
-        settings: MenuSettings = MenuSettings(),
+        settings: MenuSettings = MenuSettings(), // 호환용: 메뉴 구성에 쓰이지 않음
         now: Date = Date()
     ) -> NSMenu {
         let target = MenuTarget(actions: actions)
@@ -47,7 +51,7 @@ public final class MenuBuilder {
         sections.append(creditSection(usage: usage, auth: auth))
         sections.append(ticketSection(usage: usage, auth: auth))
         sections.append(sessionSection(sessions))
-        sections.append(settingsSection(auth: auth, settings: settings, target: target))
+        sections.append(settingsSection(auth: auth, target: target))
         sections.append([actionItem("종료", key: "q", target: target, action: #selector(MenuTarget.quit))])
 
         let menu = NSMenu()
@@ -96,7 +100,7 @@ public final class MenuBuilder {
         ]
     }
 
-    private func settingsSection(auth: AuthState, settings: MenuSettings, target: MenuTarget) -> [NSMenuItem] {
+    private func settingsSection(auth: AuthState, target: MenuTarget) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
         switch auth {
         case .signedOut:
@@ -110,28 +114,7 @@ public final class MenuBuilder {
         case .signedIn:
             items.append(actionItem("로그아웃", target: target, action: #selector(MenuTarget.logout)))
         }
-
-        let launch = actionItem("로그인 시 자동 실행", target: target, action: #selector(MenuTarget.toggleLaunchAtLogin(_:)))
-        launch.state = settings.launchAtLogin ? .on : .off
-
-        let intervalMenu = NSMenu()
-        intervalMenu.autoenablesItems = false
-        for m in Self.refreshIntervalOptions {
-            let item = actionItem("\(m)분", target: target, action: #selector(MenuTarget.setInterval(_:)))
-            item.tag = m
-            item.state = settings.refreshMinutes == m ? .on : .off
-            intervalMenu.addItem(item)
-        }
-        let intervalItem = NSMenuItem(title: "갱신 주기", action: nil, keyEquivalent: "")
-        intervalItem.submenu = intervalMenu
-
-        let settingsMenu = NSMenu()
-        settingsMenu.autoenablesItems = false
-        settingsMenu.addItem(launch)
-        settingsMenu.addItem(intervalItem)
-        let settingsItem = NSMenuItem(title: "설정", action: nil, keyEquivalent: "")
-        settingsItem.submenu = settingsMenu
-        items.append(settingsItem)
+        items.append(actionItem("설정…", target: target, action: #selector(MenuTarget.openSettings)))
         return items
     }
 
@@ -200,10 +183,7 @@ final class MenuTarget: NSObject {
     @objc func login() { actions?.login() }
     @objc func logout() { actions?.logout() }
     @objc func quit() { actions?.quit() }
-    @objc func setInterval(_ sender: NSMenuItem) { actions?.setRefreshInterval(minutes: sender.tag) }
-    @objc func toggleLaunchAtLogin(_ sender: NSMenuItem) {
-        actions?.setLaunchAtLogin(sender.state != .on) // 현재 체크 상태의 반대로
-    }
+    @objc func openSettings() { actions?.openSettings() }
 }
 
 /// 메뉴 구조 텍스트 덤프(디버그/테스트용). 구분선은 "---", 서브메뉴는 2칸 들여쓰기, 체크는 "[x] ".

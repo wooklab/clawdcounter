@@ -15,9 +15,9 @@ final class TimeFormatTests: XCTestCase {
     }
 
     func testRemainingCompact() {
-        XCTAssertEqual(TimeFormat.remainingCompact(seconds: 2 * 3600 + 13 * 60), "2h13m")
-        XCTAssertEqual(TimeFormat.remainingCompact(seconds: 2 * 3600 + 5 * 60), "2h05m")
-        XCTAssertEqual(TimeFormat.remainingCompact(seconds: 4 * 3600), "4h00m")
+        XCTAssertEqual(TimeFormat.remainingCompact(seconds: 2 * 3600 + 13 * 60), "2h 13m")
+        XCTAssertEqual(TimeFormat.remainingCompact(seconds: 2 * 3600 + 5 * 60), "2h 05m")
+        XCTAssertEqual(TimeFormat.remainingCompact(seconds: 4 * 3600), "4h 00m")
         XCTAssertEqual(TimeFormat.remainingCompact(seconds: 45 * 60), "45m")
         XCTAssertEqual(TimeFormat.remainingCompact(seconds: 30), "<1m")
         XCTAssertEqual(TimeFormat.remainingCompact(seconds: -1), "0m")

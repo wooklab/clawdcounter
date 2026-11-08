@@ -32,9 +32,5 @@ final class AppModel {
         defaults.set(minutes, forKey: Self.refreshMinutesKey)
     }
 
-    func setLaunchAtLogin(_ enabled: Bool) {
-        settings.launchAtLogin = enabled
-    }
-
     var refreshInterval: TimeInterval { TimeInterval(settings.refreshMinutes * 60) }
 }

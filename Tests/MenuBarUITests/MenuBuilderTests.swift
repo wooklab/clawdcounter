@@ -10,8 +10,7 @@ final class MenuBuilderTests: XCTestCase {
         func login() { calls.append("login") }
         func logout() { calls.append("logout") }
         func quit() { calls.append("quit") }
-        func setRefreshInterval(minutes: Int) { calls.append("interval:\(minutes)") }
-        func setLaunchAtLogin(_ enabled: Bool) { calls.append("launch:\(enabled)") }
+        func openSettings() { calls.append("settings") }
     }
 
     let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -50,7 +49,7 @@ final class MenuBuilderTests: XCTestCase {
             "---",
             "● 활성 2", "● 응답대기 1", "○ 비활성 4",
             "---",
-            "로그아웃", "설정",
+            "로그아웃", "설정…",
             "---",
             "종료",
         ])
@@ -101,7 +100,7 @@ final class MenuBuilderTests: XCTestCase {
 
     func testSignedOutHidesUsageKeepsSessionsAndLogin() {
         let t = titles(build(full, auth: .signedOut))
-        XCTAssertEqual(t, ["Claude 로그인이 필요합니다", "---", "● 활성 2", "● 응답대기 1", "○ 비활성 4", "---", "Claude 로그인", "설정", "---", "종료"])
+        XCTAssertEqual(t, ["Claude 로그인이 필요합니다", "---", "● 활성 2", "● 응답대기 1", "○ 비활성 4", "---", "Claude 로그인", "설정…", "---", "종료"])
     }
 
     func testAuthItemTitles() {
@@ -122,23 +121,32 @@ final class MenuBuilderTests: XCTestCase {
         XCTAssertTrue(titles(m).contains("● 활성 0"))
     }
 
-    func testSettingsChecksAndActions() {
+    func testSettingsItemHasNoSubmenuAndFiresOpenSettings() {
         let spy = Spy()
-        let menu = build(full, settings: MenuSettings(launchAtLogin: true, refreshMinutes: 2), spy: spy)
-        let settings = menu.items.first { $0.title == "설정" }!.submenu!
-        let launch = settings.items[0]
-        XCTAssertEqual(launch.state, .on)
-        let interval = settings.items[1].submenu!
-        XCTAssertEqual(interval.items.map(\.title), ["1분", "2분", "5분"])
-        XCTAssertEqual(interval.items.map(\.state), [.off, .on, .off])
+        let menu = build(full, spy: spy)
+        let item = menu.items.first { $0.title == "설정…" }!
+        XCTAssertNil(item.submenu)
+        XCTAssertTrue(item.isEnabled)
+        XCTAssertFalse(menu.items.contains { $0.title == "설정" || $0.title == "로그인 시 자동 실행" })
+        XCTAssertTrue(menu.items.allSatisfy { $0.submenu == nil })
 
         // 클릭 전달
         func fire(_ item: NSMenuItem) { _ = item.target!.perform(item.action!, with: item) }
-        fire(launch)
-        fire(interval.items[2])
+        fire(item)
         fire(menu.items.first { $0.title == "로그아웃" }!)
         fire(menu.items.last!)
-        XCTAssertEqual(spy.calls, ["launch:false", "interval:5", "logout", "quit"])
+        XCTAssertEqual(spy.calls, ["settings", "logout", "quit"])
+    }
+
+    func testSettingsItemPresentInEveryAuthState() {
+        for auth in [AuthState.signedOut, .expired, .signingIn, .signedIn] {
+            let t = titles(build(full, auth: auth))
+            let i = t.firstIndex(of: "설정…")
+            XCTAssertNotNil(i, "\(auth)")
+            // 설정 구획: 인증 항목 바로 뒤, 구분선과 종료 앞
+            XCTAssertEqual(t.suffix(3).first, "설정…", "\(auth)")
+            XCTAssertEqual(Array(t.suffix(2)), ["---", "종료"], "\(auth)")
+        }
     }
 
     func testCreditNumberFormatting() {
@@ -164,7 +172,7 @@ final class StatusItemRendererTests: XCTestCase {
             weekly: LimitWindow(usedPercent: 120), fetchedAt: now)
         typealias R = StatusItemRenderer
         XCTAssertEqual(R.leadingElements(usage: full, auth: .signedIn, now: now), [
-            .text("2h13m", .label), .bar(fraction: 0.5, tone: .normal), .bar(fraction: 1, tone: .critical),
+            .text("2h 13m", .label), .bar(fraction: 0.5, tone: .normal), .bar(fraction: 1, tone: .critical),
         ])
         var noFive = full; noFive.fiveHour = nil
         XCTAssertEqual(R.leadingElements(usage: noFive, auth: .signedIn, now: now), [.bar(fraction: 1, tone: .critical)])
