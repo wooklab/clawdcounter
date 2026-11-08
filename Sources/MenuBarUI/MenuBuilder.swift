@@ -74,9 +74,9 @@ public final class MenuBuilder {
         }
         guard let usage else { return [infoItem("사용량 불러오는 중…")] }
         var items: [NSMenuItem] = []
-        if let w = usage.fiveHour { items.append(infoItem(limitLine("5시간 한도", w, now, noResetNote: "활성 창 없음"))) }
-        if let w = usage.weekly { items.append(infoItem(limitLine("주간 한도", w, now))) }
-        if let w = usage.fable { items.append(infoItem(limitLine("Fable 한도", w, now))) }
+        if let w = usage.fiveHour { items.append(levelItem(limitLine("5시간 한도", w, now, noResetNote: "활성 창 없음"), percent: w.usedPercent)) }
+        if let w = usage.weekly { items.append(levelItem(limitLine("주간 한도", w, now), percent: w.usedPercent)) }
+        if let w = usage.fable { items.append(levelItem(limitLine("Fable 한도", w, now), percent: w.usedPercent)) }
         return items
     }
 
@@ -149,6 +149,11 @@ public final class MenuBuilder {
             attributes: [.foregroundColor: NSColor.labelColor, .font: NSFont.menuFont(ofSize: 0)]
         )
         return item
+    }
+
+    /// 한도 줄: 앞에 단계 색 ●, 텍스트는 기본 라벨색.
+    private func levelItem(_ text: String, percent: Double) -> NSMenuItem {
+        dotItem("●", color: UsageLevel.level(forPercent: percent).color, label: text)
     }
 
     private func dotItem(_ dot: String, color: NSColor, label: String) -> NSMenuItem {

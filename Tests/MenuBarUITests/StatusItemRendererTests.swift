@@ -34,9 +34,9 @@ final class StatusItemRendererLayoutTests: XCTestCase {
 
     func testBarsAreOrderedFiveHourThenWeekly() {
         let els = StatusItemRenderer.leadingElements(usage: usage(), auth: .signedIn, now: now)
-        XCTAssertEqual(els.dropFirst(), [.bar(fraction: 0.42, tone: .normal), .bar(fraction: 0.63, tone: .normal)])
+        XCTAssertEqual(Array(els.dropFirst()), [.bar(fraction: 0.42, level: .green), .bar(fraction: 0.63, level: .yellow)])
         let weeklyOnly = StatusItemRenderer.leadingElements(usage: usage(five: false), auth: .signedIn, now: now)
-        XCTAssertEqual(weeklyOnly, [.bar(fraction: 0.63, tone: .normal)])
+        XCTAssertEqual(weeklyOnly, [.bar(fraction: 0.63, level: .yellow)])
     }
 
     func testImageHeightIsAtMostMenuBarHeightInAllStates() {
@@ -70,5 +70,30 @@ final class StatusItemRendererLayoutTests: XCTestCase {
         let bars = image(usage(), waiting: 0)
         XCTAssertGreaterThan(out.size.width, 60) // 문구 + 세션 묶음
         XCTAssertNotEqual(out.size.width, bars.size.width)
+    }
+
+    /// 실제로 그려진 바 채움 픽셀이 단계 색인지(라이트/다크 각각) 확인한다.
+    func testBarFillPixelMatchesLevelColor() {
+        func fillPixel(_ pct: Double, _ appearance: NSAppearance) -> NSColor {
+            let u = UsageSnapshot(weekly: LimitWindow(usedPercent: pct, resetsAt: nil), fetchedAt: now)
+            let img = image(u, appearance: appearance)
+            let rep = img.representations.first as! NSBitmapImageRep
+            // 주간 바만 있을 때 x=2pt 에서 시작, 세로 중앙. 좌측 끝에서 안쪽(5pt)을 샘플(비트맵 2x, 상단 원점).
+            return rep.colorAt(x: 5 * 2, y: Int(StatusItemRenderer.height))!.usingColorSpace(.deviceRGB)!
+        }
+        func expected(_ level: UsageLevel, _ appearance: NSAppearance) -> NSColor {
+            var c = level.color
+            appearance.performAsCurrentDrawingAppearance { c = level.color.usingColorSpace(.deviceRGB)! }
+            return c
+        }
+        let cases: [(Double, UsageLevel)] = [(10, .green), (50, .yellow), (80, .orange), (95, .red)]
+        for appearance in [light, dark] {
+            for (pct, level) in cases {
+                let a = fillPixel(pct, appearance), e = expected(level, appearance)
+                XCTAssertEqual(a.redComponent, e.redComponent, accuracy: 0.05, "\(pct) r")
+                XCTAssertEqual(a.greenComponent, e.greenComponent, accuracy: 0.05, "\(pct) g")
+                XCTAssertEqual(a.blueComponent, e.blueComponent, accuracy: 0.05, "\(pct) b")
+            }
+        }
     }
 }

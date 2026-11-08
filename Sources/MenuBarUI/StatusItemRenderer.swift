@@ -8,22 +8,11 @@ public enum StatusItemRenderer {
     public static let height: CGFloat = 22
     static let scale: CGFloat = 2
 
-    static let warnThreshold = 80.0
-    static let criticalThreshold = 95.0
-
-    enum Tone: Equatable { case normal, warn, critical }
     enum TextKind { case label, count }
 
     enum Element: Equatable {
         case text(String, TextKind)
-        case bar(fraction: Double, tone: Tone)
-    }
-
-    /// 사용률(0-100) → 바 색조. 경계값 포함(80 → warn, 95 → critical).
-    static func tone(forPercent p: Double) -> Tone {
-        if p >= criticalThreshold { return .critical }
-        if p >= warnThreshold { return .warn }
-        return .normal
+        case bar(fraction: Double, level: UsageLevel)
     }
 
     /// 사용량/인증 상태 → 앞쪽(텍스트·바) 요소. 텍스트는 왼쪽, 바(5h→주간 순)는 세로로 쌓이며, 세션 묶음은 `image`가 우측에 항상 붙인다.
@@ -41,10 +30,10 @@ public enum StatusItemRenderer {
         if let five = usage.fiveHour {
             let text = five.resetsAt.map { TimeFormat.remainingCompact(seconds: $0.timeIntervalSince(now)) } ?? "–"
             out.append(.text(text, .label))
-            out.append(.bar(fraction: clamp(five.usedPercent / 100), tone: tone(forPercent: five.usedPercent)))
+            out.append(.bar(fraction: clamp(five.usedPercent / 100), level: UsageLevel.level(forPercent: five.usedPercent)))
         }
         if let weekly = usage.weekly {
-            out.append(.bar(fraction: clamp(weekly.usedPercent / 100), tone: tone(forPercent: weekly.usedPercent)))
+            out.append(.bar(fraction: clamp(weekly.usedPercent / 100), level: UsageLevel.level(forPercent: weekly.usedPercent)))
         }
         return out
     }
@@ -67,15 +56,15 @@ public enum StatusItemRenderer {
         // 1) 레이아웃: [텍스트] [바 세로 묶음] | [세션 점 세로 묶음] [🙋 (+개수)]
         let leading = leadingElements(usage: usage, auth: auth, now: now)
         var texts: [(String, CGFloat)] = []   // (문자열, x)
-        var bars: [(fraction: Double, tone: Tone)] = []
+        var bars: [(fraction: Double, level: UsageLevel)] = []
         var x = sidePadding
         for e in leading {
             switch e {
             case .text(let s, _):
                 texts.append((s, x))
                 x += ceil((s as NSString).size(withAttributes: [.font: labelFont]).width) + innerGap + 2
-            case .bar(let f, let t):
-                bars.append((f, t))
+            case .bar(let f, let l):
+                bars.append((f, l))
             }
         }
         let barsX = x
@@ -122,7 +111,7 @@ public enum StatusItemRenderer {
             let top = height / 2 + stackH / 2
             for (i, b) in bars.enumerated() {
                 let y = snap(top - barHeight - CGFloat(i) * (barHeight + barGap))
-                drawBar(fraction: b.fraction, tone: b.tone, x: barsX, y: y)
+                drawBar(fraction: b.fraction, level: b.level, x: barsX, y: y)
             }
 
             let rowCenters = (top: height * 0.75, bottom: height * 0.25)
@@ -176,7 +165,7 @@ public enum StatusItemRenderer {
         (s as NSString).draw(at: NSPoint(x: x, y: snap((height - h) / 2)), withAttributes: [.font: font])
     }
 
-    private static func drawBar(fraction: Double, tone: Tone, x: CGFloat, y: CGFloat) {
+    private static func drawBar(fraction: Double, level: UsageLevel, x: CGFloat, y: CGFloat) {
         let rect = NSRect(x: x, y: y, width: barWidth, height: barHeight)
         let radius = barHeight / 2
         NSColor.labelColor.withAlphaComponent(0.25).setFill()
@@ -184,13 +173,7 @@ public enum StatusItemRenderer {
         guard fraction > 0 else { return }
         var fill = rect
         fill.size.width = max(barHeight, rect.width * CGFloat(fraction))
-        let color: NSColor
-        switch tone {
-        case .normal: color = .labelColor
-        case .warn: color = .systemOrange
-        case .critical: color = .systemRed
-        }
-        color.setFill()
+        level.color.setFill()
         NSBezierPath(roundedRect: fill, xRadius: radius, yRadius: radius).fill()
     }
 

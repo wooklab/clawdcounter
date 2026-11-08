@@ -45,7 +45,18 @@ minimal.credit = nil
 let fiveHourInactive = UsageSnapshot(
     fiveHour: LimitWindow(usedPercent: 0, resetsAt: nil), weekly: win(5, in: 6 * 86400 + 4 * h), fetchedAt: now)
 
-let cases: [Case] = [
+// 단계별 확인: 5시간·주간이 같은 값, 그리고 서로 다른 단계 조합
+func levelCase(_ pct: Double) -> Case {
+    let u = UsageSnapshot(
+        fiveHour: win(pct, in: 2 * h), weekly: win(pct, in: 3 * 86400), fable: win(pct, in: 3 * 86400), fetchedAt: now)
+    return Case(name: "level-\(Int(pct))", usage: u, sessions: counts, auth: .signedIn)
+}
+let levelCases = [10.0, 49, 50, 79, 80, 94, 95, 100].map(levelCase)
+let mixedLevels = UsageSnapshot(
+    fiveHour: win(85, in: h), weekly: win(30, in: 3 * 86400), fable: win(55, in: 3 * 86400), fetchedAt: now)
+
+let cases: [Case] = levelCases + [
+    Case(name: "level-mixed-5h85-wk30", usage: mixedLevels, sessions: counts, auth: .signedIn),
     Case(name: "five-hour", usage: full, sessions: counts, auth: .signedIn),
     Case(name: "five-hour-inactive", usage: fiveHourInactive, sessions: counts, auth: .signedIn),
     Case(name: "no-five-hour", usage: noFive, sessions: counts, auth: .signedIn),
