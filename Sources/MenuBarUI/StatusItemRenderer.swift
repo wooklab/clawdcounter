@@ -53,7 +53,7 @@ public enum StatusItemRenderer {
         let waitingCountFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
         let emojiFont = NSFont(name: "Apple Color Emoji", size: 14) ?? NSFont.systemFont(ofSize: 14)
 
-        // 1) 레이아웃: [텍스트] [바 세로 묶음] | [세션 점 세로 묶음] [🙋 (+개수)]
+        // 1) 레이아웃: [텍스트] [바 세로 묶음] | [세션 점 세로 묶음] [✋ (+개수)]
         let leading = leadingElements(usage: usage, auth: auth, now: now)
         var texts: [(String, CGFloat)] = []   // (문자열, x)
         var bars: [(fraction: Double, level: UsageLevel)] = []
@@ -78,7 +78,7 @@ public enum StatusItemRenderer {
         let sessionsX = x
         x += dotDiameter + innerGap + numberWidth
 
-        // 응답대기: waiting > 0 일 때만 🙋 를 우측에 붙인다. 폭 0이면 아무것도 그리지 않는다.
+        // 응답대기: waiting > 0 일 때만 ✋ 를 우측에 붙인다. 폭 0이면 아무것도 그리지 않는다.
         // 개수 표기는 제 판단: 1이면 이모지만, 2 이상이면 이모지 뒤에 숫자.
         let waitingX = x + groupGap - 2
         var waitingCountX: CGFloat?
@@ -137,7 +137,7 @@ public enum StatusItemRenderer {
 
     // MARK: - 치수
 
-    static let waitingEmoji = "🙋"
+    static let waitingEmoji = "✋\u{FE0F}"
     private static let barWidth: CGFloat = 30
     private static let barHeight: CGFloat = 4.5
     private static let barGap: CGFloat = 2
