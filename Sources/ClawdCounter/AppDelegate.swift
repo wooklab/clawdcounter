@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAc
     private var appearanceObservation: NSKeyValueObservation?
     private var backgroundTasks: [Task<Void, Never>] = []
     private var loginTask: Task<Void, Never>?
+    private var probePending = CommandLine.arguments.contains("--probe-usage")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         model.onChange = { [weak self] in self?.render() }
@@ -82,6 +83,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAc
     private func handleAuth(_ state: AuthState) {
         model.authState = state
         if state == .signedIn {
+            if probePending {
+                probePending = false
+                let probe = UsageProbe(tokens: auth)
+                backgroundTasks.append(Task { await probe.run() })
+            }
             if !poller.isRunning { poller.start(immediate: true) }
         } else {
             poller.stop()

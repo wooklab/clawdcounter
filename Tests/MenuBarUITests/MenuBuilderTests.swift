@@ -43,7 +43,7 @@ final class MenuBuilderTests: XCTestCase {
             "주간 한도 63% (3일 5시간)",
             "Fable 한도 18% (3일 5시간)",
             "---",
-            "크레딧 사용량 12.5 / 100 USD",
+            "크레딧 $12.50 / $100.00",
             "---",
             "세션 초기화 티켓 2장",
             "---",
@@ -310,9 +310,47 @@ final class MenuBuilderTests: XCTestCase {
     }
 
     func testCreditNumberFormatting() {
-        XCTAssertEqual(MenuBuilder.number(1234.5), "1,234.5")
-        XCTAssertEqual(MenuBuilder.number(100), "100")
+        XCTAssertEqual(MenuBuilder.number(1234.5), "1,234.50")
+        XCTAssertEqual(MenuBuilder.number(100), "100.00")
         XCTAssertEqual(MenuBuilder.number(0.256), "0.26")
+    }
+
+    func creditItem(_ c: CreditUsage) -> NSMenuItem {
+        var u = full; u.credit = c
+        return build(u).items.first { $0.title.hasPrefix("크레딧") }!
+    }
+
+    func testCreditTextThreeCases() {
+        let cases: [(CreditUsage, String)] = [
+            (CreditUsage(used: 12.5, total: 100, unit: "USD"), "크레딧 $12.50 / $100.00"),
+            (CreditUsage(used: 12.5, total: nil, unit: "USD"), "크레딧 $12.50 사용"),
+            (CreditUsage(used: 0, total: nil, unit: "USD", isEnabled: false), "크레딧 $0.00 (추가 사용 꺼짐)"),
+        ]
+        for (c, expected) in cases {
+            let item = creditItem(c)
+            XCTAssertEqual(item.title, expected)
+            XCTAssertEqual(item.attributedTitle?.string, expected)
+            XCTAssertEqual(item.accessibilityLabel(), expected)
+        }
+    }
+
+    func testCreditNonUSDAppendsCurrencyCode() {
+        XCTAssertEqual(creditItem(CreditUsage(used: 12.5, total: 100, unit: "EUR")).title, "크레딧 12.50 EUR / 100.00 EUR")
+        XCTAssertEqual(creditItem(CreditUsage(used: 12.5, unit: "EUR")).title, "크레딧 12.50 EUR 사용")
+        XCTAssertEqual(creditItem(CreditUsage(used: 0, unit: "EUR", isEnabled: false)).title, "크레딧 0.00 EUR (추가 사용 꺼짐)")
+    }
+
+    func testDisabledCreditKeepsPositionAndSeparators() {
+        var u = full; u.credit = CreditUsage(used: 0, total: nil, unit: "USD", isEnabled: false)
+        let t = titles(build(u))
+        XCTAssertEqual(t[3...6], ["---", "크레딧 $0.00 (추가 사용 꺼짐)", "---", "세션 초기화 티켓 2장"])
+    }
+
+    func testCreditHiddenWhenNotSignedIn() {
+        for a in [AuthState.signedOut, .expired, .signingIn] {
+            XCTAssertFalse(titles(build(full, auth: a)).contains { $0.hasPrefix("크레딧") }, "\(a)")
+        }
+        XCTAssertFalse(titles(build(nil)).contains { $0.hasPrefix("크레딧") })
     }
 }
 

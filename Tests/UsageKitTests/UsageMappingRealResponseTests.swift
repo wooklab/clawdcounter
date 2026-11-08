@@ -26,7 +26,7 @@ final class UsageMappingRealResponseTests: XCTestCase {
         // 마이크로초(.802996)까지 보존
         XCTAssertEqual(try XCTUnwrap(s.weekly?.resetsAt).timeIntervalSince1970, weeklyReset + 0.802996, accuracy: 0.000_01)
         XCTAssertNil(s.fable)
-        XCTAssertNil(s.credit)
+        XCTAssertEqual(s.credit, CreditUsage(used: 0, total: nil, unit: "USD", isEnabled: false))
         XCTAssertNil(s.resetTickets)
         XCTAssertEqual(s.fetchedAt, fixedNow)
         // null 값 키는 세지 않는다. 남는 것은 null 이 아닌 미사용 키뿐.
@@ -133,23 +133,34 @@ final class UsageMappingRealResponseTests: XCTestCase {
         XCTAssertEqual(try total(#""limit": null, "cap": null, "balance": {"amount_minor": 9000, "exponent": 2}"#), 90)
     }
 
-    func testSpendEnabledButTotalUnknownIsNil() throws {
+    func testSpendEnabledButTotalUnknownHasNilTotal() throws {
         let r = try map(#"{"spend": {"enabled": true, "used": {"amount_minor": 100, "currency": "USD", "exponent": 2}, "limit": null, "cap": null, "balance": null}}"#)
-        XCTAssertNil(r.snapshot.credit)
+        XCTAssertEqual(r.snapshot.credit, CreditUsage(used: 1, total: nil, unit: "USD", isEnabled: true))
     }
 
-    func testSpendDisabledIsNilEvenWithAmounts() throws {
+    func testSpendEnabledFallsBackToExtraUsageEnabledFlag() throws {
+        let used = #""used": {"amount_minor": 100, "currency": "USD", "exponent": 2}"#
+        XCTAssertEqual(try map(#"{"spend": {\#(used)}, "extra_usage": {"is_enabled": true}}"#).snapshot.credit?.isEnabled, true)
+        XCTAssertEqual(try map(#"{"spend": {\#(used)}, "extra_usage": {"is_enabled": false}}"#).snapshot.credit?.isEnabled, false)
+        XCTAssertEqual(try map(#"{"spend": {\#(used), "enabled": false}, "extra_usage": {"is_enabled": true}}"#).snapshot.credit?.isEnabled, false)
+    }
+
+    func testSpendWithoutUsedAndNoExtraUsageIsNil() throws {
+        XCTAssertNil(try map(#"{"spend": {"enabled": true, "used": null, "limit": {"amount_minor": 5000, "exponent": 2}}}"#).snapshot.credit)
+    }
+
+    func testSpendDisabledStillMapsAmountsWithEnabledFalse() throws {
         let r = try map("""
         {"spend": {"enabled": false, "used": {"amount_minor": 100, "currency": "USD", "exponent": 2},
                    "limit": {"amount_minor": 5000, "currency": "USD", "exponent": 2}},
          "extra_usage": {"is_enabled": true, "monthly_limit": 5000, "used_credits": 1}}
         """)
-        XCTAssertNil(r.snapshot.credit)
+        XCTAssertEqual(r.snapshot.credit, CreditUsage(used: 1, total: 50, unit: "USD", isEnabled: false))
     }
 
     func testExtraUsageIsAuxiliaryWhenSpendUnusable() throws {
         let r = try map("""
-        {"spend": {"enabled": true, "used": {"amount_minor": 100, "currency": "USD", "exponent": 2}, "limit": null},
+        {"spend": {"enabled": true, "used": null, "limit": null},
          "extra_usage": {"is_enabled": true, "monthly_limit": 5000, "used_credits": 1234.5, "currency": "USD"}}
         """)
         XCTAssertEqual(r.snapshot.credit, CreditUsage(used: 1234.5, total: 5000, unit: "USD"))

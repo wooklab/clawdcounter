@@ -83,9 +83,25 @@ public final class MenuBuilder {
 
     private func creditSection(usage: UsageSnapshot?, auth: AuthState) -> [NSMenuItem] {
         guard auth == .signedIn, let c = usage?.credit else { return [] }
-        var text = "크레딧 사용량 \(Self.number(c.used)) / \(Self.number(c.total))"
-        if let unit = c.unit, !unit.isEmpty { text += " \(unit)" }
-        return [infoItem(text)]
+        let text = Self.creditText(c)
+        let item = infoItem(text)
+        item.setAccessibilityLabel(text)
+        return [item]
+    }
+
+    /// 활성+총량: `크레딧 $12.50 / $100.00`, 활성+총량 없음: `크레딧 $12.50 사용`, 비활성: `크레딧 $0.00 (추가 사용 꺼짐)`.
+    static func creditText(_ c: CreditUsage) -> String {
+        let used = money(c.used, unit: c.unit)
+        guard c.isEnabled else { return "크레딧 \(used) (추가 사용 꺼짐)" }
+        if let total = c.total { return "크레딧 \(used) / \(money(total, unit: c.unit))" }
+        return "크레딧 \(used) 사용"
+    }
+
+    /// USD 는 `$12.50`, 그 외 통화는 `12.50 EUR`, 통화 없으면 `12.50`.
+    static func money(_ v: Double, unit: String?) -> String {
+        let n = number(v)
+        guard let unit, !unit.isEmpty else { return n }
+        return unit.uppercased() == "USD" ? "$\(n)" : "\(n) \(unit)"
     }
 
     private func ticketSection(usage: UsageSnapshot?, auth: AuthState) -> [NSMenuItem] {
@@ -122,7 +138,7 @@ public final class MenuBuilder {
         f.locale = Locale(identifier: "en_US_POSIX")
         f.numberStyle = .decimal
         f.usesGroupingSeparator = true
-        f.minimumFractionDigits = 0
+        f.minimumFractionDigits = 2
         f.maximumFractionDigits = 2
         return f.string(from: NSNumber(value: v)) ?? "\(v)"
     }

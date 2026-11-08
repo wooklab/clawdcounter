@@ -11,12 +11,14 @@ public struct LimitWindow: Equatable, Sendable {
 
 public struct CreditUsage: Equatable, Sendable {
     public var used: Double
-    public var total: Double
+    public var total: Double? // nil = 한도 없음/알 수 없음
     public var unit: String?
-    public init(used: Double, total: Double, unit: String? = nil) {
+    public var isEnabled: Bool // 추가 사용(크레딧) 활성 여부
+    public init(used: Double, total: Double? = nil, unit: String? = nil, isEnabled: Bool = true) {
         self.used = used
         self.total = total
         self.unit = unit
+        self.isEnabled = isEnabled
     }
 }
 

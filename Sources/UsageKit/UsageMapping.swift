@@ -67,21 +67,19 @@ enum UsageMapping {
             fetchedAt: fetchedAt
         )
 
-        // 크레딧: spend 가 1순위, 실패하면 extra_usage(is_enabled == true 일 때만). spend.enabled == false 면 비활성으로 확정.
+        // 크레딧: used 금액을 아는 spend 가 있으면 비활성이어도 항상 매핑(isEnabled 로 구분). 없으면 extra_usage(is_enabled == true 일 때만).
         consumed.insert("spend")
         consumed.insert("extra_usage")
         var extraCredit: CreditUsage?
+        var extraEnabled: Bool?
         if let dict = root["extra_usage"] as? [String: Any] {
             let (credit, extra) = parseExtraUsage(dict)
             extraCredit = credit
+            extraEnabled = dict["is_enabled"] as? Bool
             unmapped.formUnion(extra.map { "extra_usage.\($0)" })
         }
         if let spend = root["spend"] as? [String: Any] {
-            if (spend["enabled"] as? Bool) == false {
-                snapshot.credit = nil
-            } else {
-                snapshot.credit = parseSpend(spend) ?? extraCredit
-            }
+            snapshot.credit = parseSpend(spend, fallbackEnabled: extraEnabled) ?? extraCredit
         } else {
             snapshot.credit = extraCredit
         }
@@ -120,14 +118,17 @@ enum UsageMapping {
         return (CreditUsage(used: used, total: limit, unit: dict["currency"] as? String), unused)
     }
 
+    /// used = used.amount_minor / 10^exponent, unit = used.currency,
+    /// total = limit -> cap -> balance 중 처음으로 같은 형태(amount_minor/exponent)의 money 객체인 값(없으면 nil = 한도 없음),
+    /// isEnabled = spend.enabled, 없으면 `fallbackEnabled`(extra_usage.is_enabled), 그것도 없으면 false.
+    /// used 금액을 알 수 없으면 nil.
     /// **가정**: 활성화된 `spend` 의 형태는 실제로 본 적이 없다(비활성 응답만 확인).
-    /// `enabled == true` 이면 used = used.amount_minor / 10^exponent, total = limit -> cap -> balance 중
-    /// 처음으로 같은 형태(amount_minor/exponent)의 money 객체인 값, unit = used.currency.
-    /// total 을 알 수 없으면 nil(비노출).
-    static func parseSpend(_ dict: [String: Any]) -> CreditUsage? {
-        guard (dict["enabled"] as? Bool) == true, let used = money(dict["used"]) else { return nil }
-        guard let total = ["limit", "cap", "balance"].lazy.compactMap({ money(dict[$0]) }).first else { return nil }
-        return CreditUsage(used: used.value, total: total.value, unit: used.currency ?? total.currency)
+    static func parseSpend(_ dict: [String: Any], fallbackEnabled: Bool? = nil) -> CreditUsage? {
+        guard let used = money(dict["used"]) else { return nil }
+        let total = ["limit", "cap", "balance"].lazy.compactMap { money(dict[$0]) }.first
+        return CreditUsage(
+            used: used.value, total: total?.value, unit: used.currency ?? total?.currency,
+            isEnabled: (dict["enabled"] as? Bool) ?? fallbackEnabled ?? false)
     }
 
     /// `{"amount_minor": 1234, "currency": "USD", "exponent": 2}` -> 12.34. 필드가 하나라도 없으면 nil.

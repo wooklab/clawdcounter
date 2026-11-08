@@ -41,9 +41,12 @@ warnOnly.weekly = win(79.9, in: 5 * 86400)
 var minimal = UsageSnapshot(weekly: win(10, in: 6 * 86400), fetchedAt: now)
 minimal.credit = nil
 
-// 실제 응답 형태(Max 5x): 활성 5시간 창 없음, 주간 5%, Fable/크레딧/티켓 없음
+// 실제 응답 형태(Max 5x): 활성 5시간 창 없음, 주간 5%, 추가 크레딧 꺼짐($0.00), Fable/티켓 없음
 let fiveHourInactive = UsageSnapshot(
-    fiveHour: LimitWindow(usedPercent: 0, resetsAt: nil), weekly: win(5, in: 6 * 86400 + 4 * h), fetchedAt: now)
+    fiveHour: LimitWindow(usedPercent: 0, resetsAt: nil), weekly: win(5, in: 6 * 86400 + 4 * h),
+    credit: CreditUsage(used: 0, total: nil, unit: "USD", isEnabled: false), fetchedAt: now)
+var creditNoTotal = full; creditNoTotal.credit = CreditUsage(used: 12.5, total: nil, unit: "USD")
+var creditEUR = full; creditEUR.credit = CreditUsage(used: 12.5, total: 100, unit: "EUR")
 
 // 단계별 확인: 5시간·주간이 같은 값, 그리고 서로 다른 단계 조합
 func levelCase(_ pct: Double) -> Case {
@@ -60,6 +63,9 @@ let cases: [Case] = levelCases + [
     Case(name: "five-hour", usage: full, sessions: counts, auth: .signedIn),
     Case(name: "five-hour-inactive", usage: fiveHourInactive, sessions: counts, auth: .signedIn),
     Case(name: "no-five-hour", usage: noFive, sessions: counts, auth: .signedIn),
+    Case(name: "credit-disabled", usage: fiveHourInactive, sessions: counts, auth: .signedIn),
+    Case(name: "credit-no-total", usage: creditNoTotal, sessions: counts, auth: .signedIn),
+    Case(name: "credit-eur", usage: creditEUR, sessions: counts, auth: .signedIn),
     Case(name: "no-fable", usage: noFable, sessions: counts, auth: .signedIn),
     Case(name: "waiting-0", usage: full, sessions: SessionCounts(active: 2, waiting: 0, idle: 4), auth: .signedIn),
     Case(name: "waiting-1", usage: full, sessions: SessionCounts(active: 2, waiting: 1, idle: 4), auth: .signedIn),
