@@ -73,11 +73,12 @@ public final class MenuBuilder {
         case .signedIn: break
         }
         guard let usage else { return [infoItem("사용량 불러오는 중…")] }
-        var items: [NSMenuItem] = []
-        if let w = usage.fiveHour { items.append(levelItem(limitLine("5시간 한도", w, now, noResetNote: "활성 창 없음"), percent: w.usedPercent)) }
-        if let w = usage.weekly { items.append(levelItem(limitLine("주간 한도", w, now), percent: w.usedPercent)) }
-        if let w = usage.fable { items.append(levelItem(limitLine("Fable 한도", w, now), percent: w.usedPercent)) }
-        return items
+        var rows: [LimitRowContent] = []
+        if let w = usage.fiveHour { rows.append(LimitRowContent(label: "5시간 한도", window: w, now: now, noResetNote: "활성 창 없음")) }
+        if let w = usage.weekly { rows.append(LimitRowContent(label: "주간 한도", window: w, now: now)) }
+        if let w = usage.fable { rows.append(LimitRowContent(label: "Fable 한도", window: w, now: now)) }
+        let columns = LimitColumns.fitting(rows)
+        return rows.map { limitItem($0, columns: columns) }
     }
 
     private func creditSection(usage: UsageSnapshot?, auth: AuthState) -> [NSMenuItem] {
@@ -120,17 +121,6 @@ public final class MenuBuilder {
 
     // MARK: - 항목 헬퍼
 
-    /// `noResetNote`: resetsAt 이 없을 때 꼬리로 붙일 문구(예: 5시간 창이 아직 시작되지 않음).
-    func limitLine(_ name: String, _ w: LimitWindow, _ now: Date, noResetNote: String? = nil) -> String {
-        var s = "\(name) \(Int(w.usedPercent.rounded()))%"
-        if let phrase = TimeFormat.remainingPhrase(until: w.resetsAt, now: now) {
-            s += " · \(phrase)"
-        } else if let noResetNote {
-            s += " · \(noResetNote)"
-        }
-        return s
-    }
-
     static func number(_ v: Double) -> String {
         let f = NumberFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -151,9 +141,13 @@ public final class MenuBuilder {
         return item
     }
 
-    /// 한도 줄: 앞에 단계 색 ●, 텍스트는 기본 라벨색.
-    private func levelItem(_ text: String, percent: Double) -> NSMenuItem {
-        dotItem("●", color: UsageLevel.level(forPercent: percent).color, label: text)
+    /// 한도 줄: 커스텀 뷰 행. title/접근성에는 평문을 넣어 MenuDump·테스트·VoiceOver 가 읽는다.
+    private func limitItem(_ row: LimitRowContent, columns: LimitColumns) -> NSMenuItem {
+        let item = NSMenuItem(title: row.plainText, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        item.view = LimitRowView(content: row, columns: columns)
+        item.setAccessibilityLabel(row.accessibilityText)
+        return item
     }
 
     private func dotItem(_ dot: String, color: NSColor, label: String) -> NSMenuItem {

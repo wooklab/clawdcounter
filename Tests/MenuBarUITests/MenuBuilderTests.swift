@@ -39,9 +39,9 @@ final class MenuBuilderTests: XCTestCase {
 
     func testFullStructureAndSectionOrder() {
         XCTAssertEqual(titles(build(full)), [
-            "● 5시간 한도 42% · 남은 2시간 13분",
-            "● 주간 한도 63% · 남은 3일 5시간",
-            "● Fable 한도 18% · 남은 3일 5시간",
+            "5시간 한도 42% (2시간 13분)",
+            "주간 한도 63% (3일 5시간)",
+            "Fable 한도 18% (3일 5시간)",
             "---",
             "크레딧 사용량 12.5 / 100 USD",
             "---",
@@ -58,24 +58,24 @@ final class MenuBuilderTests: XCTestCase {
     func testNoFiveHourHidesThatLine() {
         var u = full; u.fiveHour = nil
         let t = titles(build(u))
-        XCTAssertFalse(t.contains { $0.hasPrefix("● 5시간") })
-        XCTAssertEqual(t.first, "● 주간 한도 63% · 남은 3일 5시간")
+        XCTAssertFalse(t.contains { $0.hasPrefix("5시간") })
+        XCTAssertEqual(t.first, "주간 한도 63% (3일 5시간)")
     }
 
     func testFiveHourWithoutActiveWindowShowsNote() {
         let u = UsageSnapshot(
             fiveHour: LimitWindow(usedPercent: 0, resetsAt: nil), weekly: win(5, 6 * 86400), fetchedAt: now)
-        XCTAssertEqual(titles(build(u)).prefix(2), ["● 5시간 한도 0% · 활성 창 없음", "● 주간 한도 5% · 남은 6일"])
+        XCTAssertEqual(titles(build(u)).prefix(2), ["5시간 한도 0% (활성 창 없음)", "주간 한도 5% (6일)"])
     }
 
     func testWeeklyWithoutResetHasNoInactiveNote() {
         let u = UsageSnapshot(weekly: LimitWindow(usedPercent: 9), fetchedAt: now)
-        XCTAssertEqual(titles(build(u)).first, "● 주간 한도 9%")
+        XCTAssertEqual(titles(build(u)).first, "주간 한도 9%")
     }
 
     func testNoFableHidesThatLine() {
         var u = full; u.fable = nil
-        XCTAssertFalse(titles(build(u)).contains { $0.hasPrefix("● Fable") })
+        XCTAssertFalse(titles(build(u)).contains { $0.hasPrefix("Fable") })
     }
 
     func testNoCreditHidesSectionWithoutDoubleSeparators() {
@@ -95,7 +95,7 @@ final class MenuBuilderTests: XCTestCase {
 
     func testMinimalUsageOnlyWeekly() {
         let u = UsageSnapshot(weekly: win(10, 86400), fetchedAt: now)
-        XCTAssertEqual(titles(build(u)).prefix(3), ["● 주간 한도 10% · 남은 1일", "---", "● 활성 2"])
+        XCTAssertEqual(titles(build(u)).prefix(3), ["주간 한도 10% (1일)", "---", "● 활성 2"])
     }
 
     func testSignedOutHidesUsageKeepsSessionsAndLogin() {
@@ -149,35 +149,88 @@ final class MenuBuilderTests: XCTestCase {
         }
     }
 
-    /// 한도 줄 앞 "●" 만 단계 색, 나머지 텍스트는 기본 라벨색.
-    func testLimitLinesHaveLevelColoredDot() {
+    /// 한도 줄 행 뷰: 막대 채움 비율(퍼센트→폭)과 단계 색.
+    func testLimitRowViewFillWidthAndLevel() {
         let u = UsageSnapshot(
             fiveHour: win(49, 3600), weekly: win(80, 86400), fable: win(95, 86400), fetchedAt: now)
-        let items = build(u).items
+        let items = Array(build(u).items.prefix(3))
         let expected: [UsageLevel] = [.green, .orange, .red]
-        for (item, level) in zip(items.prefix(3), expected) {
-            XCTAssertTrue(item.title.hasPrefix("● "), item.title)
-            let attr = item.attributedTitle!
-            let dot = attr.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
-            XCTAssertEqual(dot, level.color, item.title)
-            let text = attr.attribute(.foregroundColor, at: 3, effectiveRange: nil) as? NSColor
-            XCTAssertEqual(text, NSColor.labelColor, item.title)
+        for (item, level) in zip(items, expected) {
+            let row = item.view as! LimitRowView
+            XCTAssertEqual(row.content.level, level, item.title)
+            XCTAssertEqual(row.barFillWidth, LimitRowView.barWidth * CGFloat(row.content.fraction), accuracy: 0.001)
+            XCTAssertNil(item.attributedTitle, item.title) // 화면에는 view 만 쓴다
+            XCTAssertFalse(item.isEnabled)
         }
-        var r = NSRange()
-        _ = items[0].attributedTitle!.attribute(.foregroundColor, at: 0, effectiveRange: &r)
-        XCTAssertEqual(r, NSRange(location: 0, length: 1)) // 점 하나에만 색
+        XCTAssertEqual((items[0].view as! LimitRowView).barFillWidth, 49, accuracy: 0.001)
+        XCTAssertEqual((items[2].view as! LimitRowView).barFillWidth, 95, accuracy: 0.001)
     }
 
-    func testLimitLineDotLevels() {
-        func dotLevel(_ pct: Double) -> NSColor {
-            let u = UsageSnapshot(weekly: win(pct, 86400), fetchedAt: now)
-            return build(u).items[0].attributedTitle!.attribute(.foregroundColor, at: 0, effectiveRange: nil) as! NSColor
+    func testLimitRowFillEdgeCases() {
+        func row(_ pct: Double) -> LimitRowView {
+            build(UsageSnapshot(weekly: win(pct, 86400), fetchedAt: now)).items[0].view as! LimitRowView
         }
-        XCTAssertEqual(dotLevel(0), UsageLevel.green.color)
-        XCTAssertEqual(dotLevel(50), UsageLevel.yellow.color)
-        XCTAssertEqual(dotLevel(79), UsageLevel.yellow.color)
-        XCTAssertEqual(dotLevel(94), UsageLevel.orange.color)
-        XCTAssertEqual(dotLevel(100), UsageLevel.red.color)
+        XCTAssertEqual(row(0).barFillWidth, 0)
+        XCTAssertEqual(row(0).content.level, .green)
+        XCTAssertEqual(row(1).barFillWidth, LimitRowView.barHeight) // 최소 막대 높이 보장
+        XCTAssertEqual(row(100).barFillWidth, LimitRowView.barWidth)
+        XCTAssertEqual(row(150).barFillWidth, LimitRowView.barWidth) // 초과는 가득 참
+        XCTAssertEqual(row(150).content.level, .red)
+        XCTAssertEqual(row(50).content.level, .yellow)
+        XCTAssertEqual(row(79).content.level, .yellow)
+        XCTAssertEqual(row(94).content.level, .orange)
+    }
+
+    func testLimitRowsShareColumnsAndAccessibility() {
+        let items = Array(build(full).items.prefix(3))
+        let rows = items.map { $0.view as! LimitRowView }
+        XCTAssertEqual(Set(rows.map(\.columns)).count, 1) // 세 줄 열 폭 동일 → 세로 정렬
+        XCTAssertEqual(Set(rows.map { $0.frame.width }).count, 1)
+        XCTAssertEqual(rows.map { $0.content.remainingText }, ["(2시간 13분)", "(3일 5시간)", "(3일 5시간)"])
+        XCTAssertEqual(items.map { $0.accessibilityLabel() }, [
+            "5시간 한도 42퍼센트 남은 2시간 13분",
+            "주간 한도 63퍼센트 남은 3일 5시간",
+            "Fable 한도 18퍼센트 남은 3일 5시간",
+        ])
+        XCTAssertEqual(rows[0].accessibilityLabel(), "5시간 한도 42퍼센트 남은 2시간 13분")
+    }
+
+    func testLimitRowInactiveAndSoonTexts() {
+        let u = UsageSnapshot(
+            fiveHour: LimitWindow(usedPercent: 0, resetsAt: nil), weekly: win(100, -5), fetchedAt: now)
+        let items = Array(build(u).items.prefix(2))
+        XCTAssertEqual(items[0].title, "5시간 한도 0% (활성 창 없음)")
+        XCTAssertEqual(items[0].accessibilityLabel(), "5시간 한도 0퍼센트 활성 창 없음")
+        XCTAssertEqual((items[0].view as! LimitRowView).barFillWidth, 0)
+        XCTAssertEqual(items[1].title, "주간 한도 100% (곧 초기화)")
+        XCTAssertEqual(items[1].accessibilityLabel(), "주간 한도 100퍼센트 곧 초기화")
+    }
+
+    func testLimitRowDrawsWithoutCrashInBothAppearances() {
+        let row = build(full).items[0].view as! LimitRowView
+        for name in [NSAppearance.Name.aqua, .darkAqua] {
+            row.appearance = NSAppearance(named: name)
+            let rep = row.bitmapImageRepForCachingDisplay(in: row.bounds)!
+            row.cacheDisplay(in: row.bounds, to: rep)
+            XCTAssertGreaterThan(rep.pixelsWide, 0)
+        }
+    }
+
+    /// AppDelegate 가 한도 구획 끝(첫 구분선 앞)에 줄을 끼워 넣어도 한도 줄 뷰는 그대로 유지된다.
+    func testInsertedItemKeepsLimitViews() {
+        var items = build(full).items
+        let extra = NSMenuItem(title: "마지막 갱신 실패 · 이전 값 표시", action: nil, keyEquivalent: "")
+        items.insert(extra, at: items.firstIndex(where: \.isSeparatorItem) ?? items.endIndex)
+        let m = NSMenu()
+        for i in items.prefix(4) { m.addItem(i) }
+        XCTAssertEqual(m.items.prefix(3).compactMap { $0.view as? LimitRowView }.count, 3)
+        XCTAssertEqual(m.items[3].title, "마지막 갱신 실패 · 이전 값 표시")
+    }
+
+    func testSignedOutAndExpiredHideLimitRows() {
+        for auth in [AuthState.signedOut, .expired, .signingIn] {
+            XCTAssertTrue(build(full, auth: auth).items.allSatisfy { $0.view == nil }, "\(auth)")
+        }
     }
 
     func testLevelColorsAreDistinctAndYellowDarkerOnLight() {

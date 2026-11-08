@@ -134,6 +134,74 @@ for mode in Mode.allCases {
     written.append(sheet.path)
 }
 
+// 드롭다운 한도 구획만 렌더: 한도 줄 커스텀 뷰를 쌓아 bitmapImageRep 로 캐시해 PNG 저장
+// (build/preview/menu-limits-<case>-<light|dark>.png)
+@MainActor final class PreviewBackdrop: NSView {
+    var color: NSColor = .windowBackgroundColor
+    override var isFlipped: Bool { true }
+    override func draw(_ dirtyRect: NSRect) { color.setFill(); bounds.fill() }
+}
+
+/// 메뉴 항목 뷰는 NSMenuItemViewer 안에서 원점이 고정되므로, 행마다 자기 bounds 를 bitmapImageRep 로 캐시한 뒤 배경 위에 합성한다.
+@MainActor func limitsPNG(_ usage: UsageSnapshot, mode: Mode) -> Data? {
+    let menu = MenuBuilder(actions: nil).buildMenu(usage: usage, sessions: counts, auth: .signedIn, now: now)
+    let views = menu.items.prefix { !$0.isSeparatorItem }.compactMap(\.view)
+    guard !views.isEmpty else { return nil }
+    let pad: CGFloat = 6
+    let width = max(views.map { $0.frame.width }.max() ?? 0, 260) // 실제 메뉴는 다른 항목 때문에 더 넓다
+    let rows: [NSBitmapImageRep] = views.map { v in
+        v.frame.size.width = width
+        let root = PreviewBackdrop(frame: v.bounds) // 행마다 배경을 깔아 투명 배경 위 라벨색 착시를 막는다
+        root.color = mode.background
+        root.appearance = mode.appearance
+        root.addSubview(v)
+        let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: Int(width) * scale, pixelsHigh: Int(v.bounds.height) * scale,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        rep.size = v.bounds.size
+        root.cacheDisplay(in: root.bounds, to: rep)
+        return rep
+    }
+    let height = rows.reduce(pad * 2) { $0 + $1.size.height }
+    let out = NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: Int(width) * scale, pixelsHigh: Int(height) * scale,
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    out.size = NSSize(width: width, height: height)
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: out)
+    mode.background.setFill()
+    NSRect(x: 0, y: 0, width: width, height: height).fill()
+    var top = height - pad
+    for rep in rows {
+        top -= rep.size.height
+        rep.draw(in: NSRect(x: 0, y: top, width: rep.size.width, height: rep.size.height))
+    }
+    NSGraphicsContext.restoreGraphicsState()
+    return out.representation(using: .png, properties: [:])
+}
+
+let limitCases: [(String, UsageSnapshot)] = [
+    ("five-hour-42", UsageSnapshot(
+        fiveHour: win(42, in: 2 * h + 13 * 60), weekly: win(63, in: 3 * 86400 + 5 * h), fetchedAt: now)),
+    ("five-hour-inactive", fiveHourInactive),
+    ("mixed-80s-95s", UsageSnapshot(
+        fiveHour: win(96, in: 25 * 60), weekly: win(82, in: 86400 + 3 * h), fable: win(79.9, in: 5 * 86400), fetchedAt: now)),
+    ("no-five-hour", noFive),
+    ("with-fable", full),
+    ("all-100", UsageSnapshot(
+        fiveHour: win(100, in: 0), weekly: win(100, in: 3 * 86400), fable: LimitWindow(usedPercent: 1), fetchedAt: now)),
+]
+for mode in Mode.allCases {
+    for (name, usage) in limitCases {
+        guard let data = limitsPNG(usage, mode: mode) else { continue }
+        let url = outDir.appendingPathComponent("menu-limits-\(name)-\(mode.rawValue).png")
+        try data.write(to: url)
+        written.append(url.path)
+    }
+}
+
 // 메뉴 구조 덤프
 @MainActor final class NoopActions: MenuActions {
     func login() {}
