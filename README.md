@@ -1,6 +1,8 @@
 # ClawdCounter
 
-*An unofficial macOS menu bar app that shows your Claude usage limits (5-hour / weekly) and the state of your local Claude Code sessions at a glance. Not affiliated with Anthropic; it relies on undocumented endpoints that may change or be blocked at any time. The UI is Korean only.*
+[한국어](README.md) | [English](README.en.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
+
+*An unofficial macOS menu bar app that shows your Claude usage limits (5-hour / weekly) and the state of your local Claude Code sessions at a glance. Not affiliated with Anthropic; it relies on undocumented endpoints that may change or be blocked at any time. The UI supports Korean, English, Simplified Chinese, and Japanese. English documentation: [README.en.md](README.en.md).*
 
 Claude 사용량 한도와 로컬 Claude Code 세션 현황을 macOS 메뉴바에 보여주는 비공식 앱입니다.
 
@@ -23,10 +25,11 @@ Claude 사용량 한도와 로컬 Claude Code 세션 현황을 macOS 메뉴바�
   1. 한도: 5시간 / 주간 / Fable. 바, 퍼센트, 남은 시간. API 응답에 해당 한도가 없으면 그 줄은 표시하지 않습니다.
   2. 크레딧: 추가 사용(크레딧) 금액. 총량을 아는 경우 `사용액 / 총량`.
   3. 세션: 상태별 헤더와 세션명 목록(상태별 최대 8개, 초과분은 `외 N개`).
-  4. Claude 로그인 / 로그아웃, 설정(로그인 시 자동 실행, 사용량 갱신 주기 1·2·5분).
+  4. Claude 로그인 / 로그아웃, 설정(로그인 시 자동 실행, 사용량 갱신 주기 1·2·5분, 언어).
   5. 종료.
 - **세션 상태 3종**: ● 활성(초록) / 응답대기(메뉴바는 ✋, 드롭다운은 노랑 ●) / ○ 비활성. 실행 중인 서브에이전트는 활성 세션에 1개씩 더해지고 `↳ 설명`으로 나열됩니다.
 - **세션명 클릭**: 그 세션이 실행 중인 앱(터미널, VS Code, Claude 데스크탑 등)을 앞으로 가져옵니다.
+- **다국어**: 한국어, English, 简体中文, 日本語 4개 언어를 지원합니다. 기본값은 시스템 언어를 따르며, 설정에서 언어를 바꿀 수 있습니다.
 
 ## 주의 / 면책
 
@@ -69,6 +72,7 @@ open build/ClawdCounter.app
 2. 메뉴바 항목을 클릭하고 **Claude 로그인**을 선택합니다. 기본 브라우저가 열리고, 로그인을 마치면 앱이 자동으로 사용량을 불러옵니다.
 3. 로컬 콜백 서버를 열 수 없으면 브라우저에서 표시되는 코드를 앱에 붙여넣는 방식으로 전환됩니다.
 4. 사용량은 기본 1분마다 갱신되며(설정에서 1·2·5분), 메뉴를 열 때도 갱신합니다.
+5. 설정 → 언어에서 표시 언어를 바꿀 수 있습니다. 변경하면 메뉴바, 드롭다운, 설정 창에 바로 반영됩니다.
 
 ## 개인정보
 
@@ -92,7 +96,7 @@ open build/ClawdCounter.app
 **앱이 디스크에 쓰는 것**
 
 - `~/Library/Application Support/ClawdCounter/last_usage_raw.json`: 디버깅용으로 **마지막 사용량 API 응답 원문**을 덮어씁니다(권한 0600). 개인 사용량 정보가 들어 있으니 공유하지 마세요. 토큰과 헤더는 저장하지 않습니다.
-- 사용량 갱신 주기 설정(UserDefaults).
+- 사용량 갱신 주기와 언어 설정(UserDefaults).
 
 ## 알려진 한계
 
@@ -101,7 +105,6 @@ open build/ClawdCounter.app
 - 세션 초기화 사용권(티켓) 개수는 실제 응답에서 필드를 찾지 못해 **지원하지 않습니다**.
 - **응답대기** 상태는 `claude` 바이너리 분석으로 알아낸 값(`waiting`)에 기반하며, 실제 세션에서 확인하지는 못했습니다.
 - 세션명 클릭은 **앱 단위로 전면화**할 뿐 앱 안의 특정 탭/창/세션을 고르지는 않습니다. tmux처럼 부모 프로세스 사슬이 끊기는 경우는 앱을 찾지 못합니다.
-- UI 문자열은 한국어만 지원합니다.
 - 서명하지 않은(임시 서명) 로컬 빌드만 지원하며 배포용 바이너리는 제공하지 않습니다.
 
 ## 개발

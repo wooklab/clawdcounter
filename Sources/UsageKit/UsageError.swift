@@ -1,3 +1,4 @@
+import CoreModels
 import Foundation
 
 /// 사용량 조회 오류. 토큰·헤더·응답 본문 등 민감값은 담지 않는다.
@@ -18,14 +19,21 @@ public enum UsageError: Error, Equatable, Sendable, CustomStringConvertible {
         return nil
     }
 
-    public var description: String {
+    /// 표시 언어로 된 설명. 메인 스레드 밖에서도 읽을 수 있다.
+    public var description: String { message() }
+
+    public func message(lang: Language = .current) -> String {
+        L10n.tr(key, lang: lang)
+    }
+
+    private var key: L10n.Key {
         switch self {
-        case .tokenUnavailable: "액세스 토큰을 얻지 못했습니다."
-        case .unauthorized: "사용량 조회 인증 실패 (HTTP 401)."
-        case .rateLimited(let s): "사용량 조회 한도 초과 (HTTP 429)" + (s.map { ", \(Int($0))초 후 재시도" } ?? "") + "."
-        case .http(let status): "사용량 조회 실패 (HTTP \(status))."
-        case .network(let code): "네트워크 오류 (\(code.rawValue))."
-        case .invalidResponse: "사용량 응답 형식이 올바르지 않습니다."
+        case .tokenUnavailable: .usageTokenUnavailable
+        case .unauthorized: .usageUnauthorized
+        case .rateLimited(let s): .usageRateLimited(retryAfterSeconds: s.map { Int($0) })
+        case .http(let status): .usageHTTP(status: status)
+        case .network(let code): .networkError(code: code.rawValue)
+        case .invalidResponse: .usageInvalidResponse
         }
     }
 }

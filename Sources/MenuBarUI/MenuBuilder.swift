@@ -47,16 +47,17 @@ public final class MenuBuilder {
         sessions: SessionCounts,
         auth: AuthState,
         settings: MenuSettings = MenuSettings(), // 호환용: 메뉴 구성에 쓰이지 않음
-        now: Date = Date()
+        now: Date = Date(),
+        lang: Language = .current
     ) -> NSMenu {
         let target = MenuTarget(actions: actions)
         var sections: [[NSMenuItem]] = []
-        sections.append(usageSection(usage: usage, auth: auth, now: now))
-        sections.append(creditSection(usage: usage, auth: auth))
-        sections.append(ticketSection(usage: usage, auth: auth))
-        sections.append(sessionSection(sessions))
-        sections.append(settingsSection(auth: auth, target: target))
-        sections.append([actionItem("종료", key: "q", target: target, action: #selector(MenuTarget.quit))])
+        sections.append(usageSection(usage: usage, auth: auth, now: now, lang: lang))
+        sections.append(creditSection(usage: usage, auth: auth, lang: lang))
+        sections.append(ticketSection(usage: usage, auth: auth, lang: lang))
+        sections.append(sessionSection(sessions, lang: lang))
+        sections.append(settingsSection(auth: auth, target: target, lang: lang))
+        sections.append([actionItem(L10n.tr(.quit, lang: lang), key: "q", target: target, action: #selector(MenuTarget.quit))])
 
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -69,25 +70,29 @@ public final class MenuBuilder {
 
     // MARK: - 구획
 
-    private func usageSection(usage: UsageSnapshot?, auth: AuthState, now: Date) -> [NSMenuItem] {
+    private func usageSection(usage: UsageSnapshot?, auth: AuthState, now: Date, lang: Language) -> [NSMenuItem] {
         switch auth {
-        case .signedOut: return [infoItem("Claude 로그인이 필요합니다")]
-        case .expired: return [infoItem("로그인이 만료되었습니다")]
-        case .signingIn: return [infoItem("로그인 중…")]
+        case .signedOut: return [infoItem(L10n.tr(.menuLoginRequired, lang: lang))]
+        case .expired: return [infoItem(L10n.tr(.menuLoginExpired, lang: lang))]
+        case .signingIn: return [infoItem(L10n.tr(.loggingIn, lang: lang))]
         case .signedIn: break
         }
-        guard let usage else { return [infoItem("사용량 불러오는 중…")] }
+        guard let usage else { return [infoItem(L10n.tr(.loadingUsage, lang: lang))] }
         var rows: [LimitRowContent] = []
-        if let w = usage.fiveHour { rows.append(LimitRowContent(label: "5시간 한도", window: w, now: now, noResetNote: "활성 창 없음")) }
-        if let w = usage.weekly { rows.append(LimitRowContent(label: "주간 한도", window: w, now: now)) }
-        if let w = usage.fable { rows.append(LimitRowContent(label: "Fable 한도", window: w, now: now)) }
+        if let w = usage.fiveHour {
+            rows.append(LimitRowContent(
+                label: L10n.tr(.limitFiveHour, lang: lang), window: w, now: now,
+                noResetNote: L10n.tr(.noActiveWindow, lang: lang), lang: lang))
+        }
+        if let w = usage.weekly { rows.append(LimitRowContent(label: L10n.tr(.limitWeekly, lang: lang), window: w, now: now, lang: lang)) }
+        if let w = usage.fable { rows.append(LimitRowContent(label: L10n.tr(.limitFable, lang: lang), window: w, now: now, lang: lang)) }
         let columns = LimitColumns.fitting(rows)
         return rows.map { limitItem($0, columns: columns) }
     }
 
-    private func creditSection(usage: UsageSnapshot?, auth: AuthState) -> [NSMenuItem] {
+    private func creditSection(usage: UsageSnapshot?, auth: AuthState, lang: Language) -> [NSMenuItem] {
         guard auth == .signedIn, let c = usage?.credit else { return [] }
-        let text = Self.creditText(c)
+        let text = Self.creditText(c, lang: lang)
         let item = infoItem(text)
         item.setAccessibilityLabel(text)
         return [item]
@@ -95,12 +100,13 @@ public final class MenuBuilder {
 
     /// 총량 있음: `크레딧 $12.50 / $100.00`(비활성이면 뒤에 ` (사용 불가)`).
     /// 총량 없음: 활성 `크레딧 $12.50 사용`, 비활성 `크레딧 $0.00 (추가 사용 꺼짐)`.
-    static func creditText(_ c: CreditUsage) -> String {
+    static func creditText(_ c: CreditUsage, lang: Language = .current) -> String {
         let used = money(c.used, unit: c.unit)
         if let total = c.total {
-            return "크레딧 \(used) / \(money(total, unit: c.unit))" + (c.isEnabled ? "" : " (사용 불가)")
+            return L10n.tr(.creditWithTotal(used: used, total: money(total, unit: c.unit)), lang: lang)
+                + (c.isEnabled ? "" : L10n.tr(.creditUnavailableSuffix, lang: lang))
         }
-        return c.isEnabled ? "크레딧 \(used) 사용" : "크레딧 \(used) (추가 사용 꺼짐)"
+        return L10n.tr(c.isEnabled ? .creditUsed(used) : .creditExtraOff(used), lang: lang)
     }
 
     /// USD 는 `$12.50`, 그 외 통화는 `12.50 EUR`, 통화 없으면 `12.50`.
@@ -110,30 +116,30 @@ public final class MenuBuilder {
         return unit.uppercased() == "USD" ? "$\(n)" : "\(n) \(unit)"
     }
 
-    private func ticketSection(usage: UsageSnapshot?, auth: AuthState) -> [NSMenuItem] {
+    private func ticketSection(usage: UsageSnapshot?, auth: AuthState, lang: Language) -> [NSMenuItem] {
         guard auth == .signedIn, let t = usage?.resetTickets else { return [] }
-        return [infoItem("세션 초기화 티켓 \(t.remaining)장")]
+        return [infoItem(L10n.tr(.resetTickets(t.remaining), lang: lang))]
     }
 
-    private func sessionSection(_ s: SessionCounts) -> [NSMenuItem] {
-        Self.sessionItems(s, actions: actions)
+    private func sessionSection(_ s: SessionCounts, lang: Language) -> [NSMenuItem] {
+        Self.sessionItems(s, actions: actions, lang: lang)
     }
 
-    private func settingsSection(auth: AuthState, target: MenuTarget) -> [NSMenuItem] {
+    private func settingsSection(auth: AuthState, target: MenuTarget, lang: Language) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
         switch auth {
         case .signedOut:
-            items.append(actionItem("Claude 로그인", target: target, action: #selector(MenuTarget.login)))
+            items.append(actionItem(L10n.tr(.login, lang: lang), target: target, action: #selector(MenuTarget.login)))
         case .expired:
-            items.append(actionItem("Claude 다시 로그인", target: target, action: #selector(MenuTarget.login)))
+            items.append(actionItem(L10n.tr(.loginAgain, lang: lang), target: target, action: #selector(MenuTarget.login)))
         case .signingIn:
-            let item = actionItem("로그인 중…", target: target, action: #selector(MenuTarget.login))
+            let item = actionItem(L10n.tr(.loggingIn, lang: lang), target: target, action: #selector(MenuTarget.login))
             item.isEnabled = false
             items.append(item)
         case .signedIn:
-            items.append(actionItem("Claude 로그아웃", target: target, action: #selector(MenuTarget.logout)))
+            items.append(actionItem(L10n.tr(.logout, lang: lang), target: target, action: #selector(MenuTarget.logout)))
         }
-        items.append(actionItem("설정…", target: target, action: #selector(MenuTarget.openSettings)))
+        items.append(actionItem(L10n.tr(.settingsEllipsis, lang: lang), target: target, action: #selector(MenuTarget.openSettings)))
         return items
     }
 
@@ -177,31 +183,44 @@ public final class MenuBuilder {
     /// 세 헤더는 개수가 0 이어도 항상 표시한다.
     /// 헤더·`외 N개` 는 비클릭 커스텀 뷰 행(labelColor), 세션명은 클릭 가능한 일반 항목(`focusSession` 호출).
     /// 모든 항목의 `title` 은 평문이다.
-    static func sessionItems(_ s: SessionCounts, actions: MenuActions? = nil) -> [NSMenuItem] {
+    static func sessionItems(_ s: SessionCounts, actions: MenuActions? = nil, lang: Language = .current) -> [NSMenuItem] {
         let groups: [(dot: String, color: NSColor, label: String, count: Int, sessions: [SessionRef])] = [
-            ("●", .systemGreen, "활성", s.active, s.activeSessions),
-            ("●", .systemYellow, "응답대기", s.waiting, s.waitingSessions),
-            ("○", .labelColor, "비활성", s.idle, s.idleSessions),
+            ("●", .systemGreen, L10n.tr(.sessionActive, lang: lang), s.active, s.activeSessions),
+            ("●", .systemYellow, L10n.tr(.sessionWaiting, lang: lang), s.waiting, s.waitingSessions),
+            ("○", .labelColor, L10n.tr(.sessionIdle, lang: lang), s.idle, s.idleSessions),
         ]
         var items: [NSMenuItem] = []
         for g in groups {
-            items.append(textRow("\(g.dot) \(g.label) \(g.count)", dotColor: g.color, accessibility: "\(g.label) 세션 \(g.count)개"))
+            items.append(textRow(
+                "\(g.dot) \(g.label) \(g.count)", dotColor: g.color,
+                accessibility: L10n.tr(.sessionCountSpoken(state: g.label, count: g.count), lang: lang)))
             for ref in g.sessions.prefix(maxNamesPerState) {
-                let shown = displayName(ref.name)
+                let shown = displayName(sessionName(ref, lang: lang))
                 let target = SessionTarget(ref: ref, actions: actions)
                 let item = NSMenuItem(title: "\(nameIndent)· \(shown)", action: #selector(SessionTarget.focus), keyEquivalent: "")
                 item.target = target
                 item.representedObject = target // target은 weak이므로 강한 참조 유지
                 item.isEnabled = true
-                item.setAccessibilityLabel("세션 \(shown) 열기")
+                item.setAccessibilityLabel(L10n.tr(.openSession(shown), lang: lang))
                 items.append(item)
             }
             let extra = g.sessions.count - maxNamesPerState
             if extra > 0 {
-                items.append(textRow("\(nameIndent)외 \(extra)개", dotColor: nil, accessibility: "그 밖에 \(g.label) 세션 \(extra)개"))
+                items.append(textRow(
+                    nameIndent + L10n.tr(.moreCount(extra), lang: lang), dotColor: nil,
+                    accessibility: L10n.tr(.moreSessionsSpoken(state: g.label, count: extra), lang: lang)))
             }
         }
         return items
+    }
+
+    /// 세션명. 대체 표시명(`placeholder`)이면 `lang` 언어 문자열.
+    static func sessionName(_ ref: SessionRef, lang: Language = .current) -> String {
+        switch ref.placeholder {
+        case nil: ref.name
+        case .unnamed: L10n.tr(.unnamedSession, lang: lang)
+        case .subagent: L10n.tr(.unnamedSubagent, lang: lang)
+        }
     }
 
     /// 줄바꿈·탭은 공백으로, 40자 초과는 39자 + `…`.

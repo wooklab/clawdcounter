@@ -18,12 +18,25 @@ final class AppModel {
     var usageStale = false
 
     private(set) var settings: MenuSettings
+    /// 표시 언어 설정. 실제 언어는 `Language.current` 에 반영되어 UI·오류 설명이 읽는다.
+    private(set) var languagePreference: LanguagePreference
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         let stored = defaults.integer(forKey: Self.refreshMinutesKey)
         let minutes = MenuBuilder.refreshIntervalOptions.contains(stored) ? stored : 1
         settings = MenuSettings(launchAtLogin: false, refreshMinutes: minutes)
+        languagePreference = LanguagePreference.load(from: defaults)
+        Language.setCurrent(languagePreference.resolved())
+    }
+
+    /// 언어 설정을 저장하고 현재 언어를 바꾼다. 상태바 다시 그리기는 `onChange` 로 알린다.
+    func setLanguagePreference(_ preference: LanguagePreference) {
+        guard preference != languagePreference else { return }
+        languagePreference = preference
+        preference.save(to: defaults)
+        Language.setCurrent(preference.resolved())
+        onChange?()
     }
 
     func setRefreshMinutes(_ minutes: Int) {

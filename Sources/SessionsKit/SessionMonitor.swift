@@ -13,8 +13,6 @@ public final class SessionMonitor: SessionMonitoring, @unchecked Sendable {
 
     /// 서브에이전트 파일(jsonl/meta)의 mtime 이 이보다 오래되면 크래시 등으로 `finished` 가 안 붙은 잔존물로 보고 제외한다(초).
     public static let subagentStaleThreshold: TimeInterval = 600
-    /// description 이 비었을 때 쓰는 서브에이전트 표시명 본문.
-    static let subagentFallbackName = "서브에이전트"
     static let subagentPrefix = "↳ "
 
     public static var defaultProjectsDirectory: URL {
@@ -146,9 +144,11 @@ public final class SessionMonitor: SessionMonitoring, @unchecked Sendable {
             let (kind, known) = mapping.classify(record.status)
             if !known { logUnknown(record.status) }
             if let sid = record.sessionId, parents[sid].map({ pid < $0.pid }) ?? true { parents[sid] = (pid, record.entrypoint) }
+            let name = Self.displayName(name: record.name, cwd: record.cwd)
             let ref = SessionRef(
-                name: Self.displayName(name: record.name, cwd: record.cwd),
-                pid: Int32(truncatingIfNeeded: pid), entrypoint: record.entrypoint)
+                name: name ?? "",
+                pid: Int32(truncatingIfNeeded: pid), entrypoint: record.entrypoint,
+                placeholder: name == nil ? .unnamed : nil)
             switch kind {
             case .active: active.append(ref)
             case .waiting: waiting.append(ref)
@@ -157,6 +157,8 @@ public final class SessionMonitor: SessionMonitoring, @unchecked Sendable {
         }
         func sorted(_ refs: [SessionRef]) -> [SessionRef] {
             refs.sorted {
+                // 이름 없는 세션은 뒤로 보낸다.
+                if ($0.placeholder == nil) != ($1.placeholder == nil) { return $0.placeholder == nil }
                 let order = $0.name.compare($1.name, options: [.caseInsensitive, .numeric])
                 return order == .orderedSame ? ($0.pid ?? 0) < ($1.pid ?? 0) : order == .orderedAscending
             }
@@ -201,34 +203,37 @@ public final class SessionMonitor: SessionMonitoring, @unchecked Sendable {
                           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                           (object["finished"] as? Bool) != true
                     else { continue }
+                    let name = Self.subagentName(description: object["description"] as? String)
                     let ref = SessionRef(
-                        name: Self.subagentName(description: object["description"] as? String),
+                        name: name ?? "",
                         pid: nil, entrypoint: parent.entrypoint, isSubagent: true,
-                        parentPid: Int32(truncatingIfNeeded: parent.pid))
+                        parentPid: Int32(truncatingIfNeeded: parent.pid),
+                        placeholder: name == nil ? .subagent : nil)
                     found.append((ref, meta.path))
                 }
             }
         }
         return found.sorted {
+            if ($0.ref.placeholder == nil) != ($1.ref.placeholder == nil) { return $0.ref.placeholder == nil }
             let order = $0.ref.name.compare($1.ref.name, options: [.caseInsensitive, .numeric])
             return order == .orderedSame ? $0.key < $1.key : order == .orderedAscending
         }.map(\.ref)
     }
 
-    /// `↳ <description>`; description 이 비면 `↳ 서브에이전트`.
-    static func subagentName(description: String?) -> String {
+    /// `↳ <description>`; description 이 비면 nil(UI 가 `.subagent` 대체 표시명 `↳ 서브에이전트` 를 그린다).
+    static func subagentName(description: String?) -> String? {
         let text = description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return subagentPrefix + (text.isEmpty ? subagentFallbackName : text)
+        return text.isEmpty ? nil : subagentPrefix + text
     }
 
-    /// 세션명: `name`(공백 제외 비어 있지 않을 때) -> `cwd` 의 마지막 경로 요소 -> "이름 없음".
-    static func displayName(name: String?, cwd: String?) -> String {
+    /// 세션명: `name`(공백 제외 비어 있지 않을 때) -> `cwd` 의 마지막 경로 요소 -> nil(UI 가 `.unnamed` 대체 표시명 "이름 없음" 을 그린다).
+    static func displayName(name: String?, cwd: String?) -> String? {
         if let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { return name }
         if let cwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !cwd.isEmpty {
             let last = (cwd as NSString).lastPathComponent
             if !last.isEmpty, last != "/" { return last }
         }
-        return "이름 없음"
+        return nil
     }
 
     /// `<pid>.json`만 허용(`<pid>.<hash>.key` 등 무시). 읽기/파싱 실패(부분 쓰기 포함)는 nil.

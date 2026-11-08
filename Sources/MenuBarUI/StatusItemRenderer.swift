@@ -16,11 +16,11 @@ public enum StatusItemRenderer {
     }
 
     /// 사용량/인증 상태 → 앞쪽(텍스트·바) 요소. 텍스트는 왼쪽, 바(5h→주간 순)는 세로로 쌓이며, 세션 묶음은 `image`가 우측에 항상 붙인다.
-    static func leadingElements(usage: UsageSnapshot?, auth: AuthState, now: Date) -> [Element] {
+    static func leadingElements(usage: UsageSnapshot?, auth: AuthState, now: Date, lang: Language = .current) -> [Element] {
         switch auth {
-        case .signedOut: return [.text("로그인 필요", .label)]
-        case .expired: return [.text("다시 로그인 필요", .label)]
-        case .signingIn: return [.text("로그인 중…", .label)]
+        case .signedOut: return [.text(L10n.tr(.statusLoginRequired, lang: lang), .label)]
+        case .expired: return [.text(L10n.tr(.statusLoginAgain, lang: lang), .label)]
+        case .signingIn: return [.text(L10n.tr(.loggingIn, lang: lang), .label)]
         case .signedIn: break
         }
         guard let usage, usage.fiveHour != nil || usage.weekly != nil else {
@@ -46,7 +46,8 @@ public enum StatusItemRenderer {
         sessions: SessionCounts,
         auth: AuthState,
         now: Date = Date(),
-        appearance: NSAppearance = NSApplication.shared.effectiveAppearance
+        appearance: NSAppearance = NSApplication.shared.effectiveAppearance,
+        lang: Language = .current
     ) -> NSImage {
         let labelFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         let sessionFont = NSFont.monospacedDigitSystemFont(ofSize: 9.5, weight: .semibold)
@@ -54,7 +55,7 @@ public enum StatusItemRenderer {
         let emojiFont = NSFont(name: "Apple Color Emoji", size: 14) ?? NSFont.systemFont(ofSize: 14)
 
         // 1) 레이아웃: [텍스트] [바 세로 묶음] | [세션 점 세로 묶음] [✋ (+개수)]
-        let leading = leadingElements(usage: usage, auth: auth, now: now)
+        let leading = leadingElements(usage: usage, auth: auth, now: now, lang: lang)
         var texts: [(String, CGFloat)] = []   // (문자열, x)
         var bars: [(fraction: Double, level: UsageLevel)] = []
         var x = sidePadding
