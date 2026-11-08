@@ -102,26 +102,48 @@ public final class SessionMonitor: SessionMonitoring, @unchecked Sendable {
     }
 
     private func computeCounts() -> SessionCounts {
-        var counts = SessionCounts(active: 0, waiting: 0, idle: 0)
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-        for name in names {
-            guard let (pid, status, procStart) = readRecord(named: name) else { continue }
+        var active: [(name: String, pid: Int)] = []
+        var waiting: [(name: String, pid: Int)] = []
+        var idle: [(name: String, pid: Int)] = []
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        for file in files {
+            guard let record = readRecord(named: file) else { continue }
+            let pid = record.pid
             guard ProcessProbe.isAlive(pid) else { continue }
-            if let procStart, ProcessProbe.procStartMatches(procStart, pid: pid) == false { continue }
+            if let procStart = record.procStart, ProcessProbe.procStartMatches(procStart, pid: pid) == false { continue }
 
-            let (kind, known) = mapping.classify(status)
-            if !known { logUnknown(status) }
+            let (kind, known) = mapping.classify(record.status)
+            if !known { logUnknown(record.status) }
+            let entry = (name: Self.displayName(name: record.name, cwd: record.cwd), pid: pid)
             switch kind {
-            case .active: counts.active += 1
-            case .waiting: counts.waiting += 1
-            case .idle: counts.idle += 1
+            case .active: active.append(entry)
+            case .waiting: waiting.append(entry)
+            case .idle: idle.append(entry)
             }
         }
-        return counts
+        func sortedNames(_ entries: [(name: String, pid: Int)]) -> [String] {
+            entries.sorted {
+                let order = $0.name.compare($1.name, options: [.caseInsensitive, .numeric])
+                return order == .orderedSame ? $0.pid < $1.pid : order == .orderedAscending
+            }.map(\.name)
+        }
+        return SessionCounts(
+            active: active.count, waiting: waiting.count, idle: idle.count,
+            activeNames: sortedNames(active), waitingNames: sortedNames(waiting), idleNames: sortedNames(idle))
+    }
+
+    /// 세션명: `name`(공백 제외 비어 있지 않을 때) -> `cwd` 의 마지막 경로 요소 -> "이름 없음".
+    static func displayName(name: String?, cwd: String?) -> String {
+        if let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { return name }
+        if let cwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !cwd.isEmpty {
+            let last = (cwd as NSString).lastPathComponent
+            if !last.isEmpty, last != "/" { return last }
+        }
+        return "이름 없음"
     }
 
     /// `<pid>.json`만 허용(`<pid>.<hash>.key` 등 무시). 읽기/파싱 실패(부분 쓰기 포함)는 nil.
-    private func readRecord(named name: String) -> (pid: Int, status: String?, procStart: String?)? {
+    private func readRecord(named name: String) -> (pid: Int, status: String?, procStart: String?, name: String?, cwd: String?)? {
         guard name.hasSuffix(".json"),
               let pid = Int(name.dropLast(".json".count)), pid > 0, String(pid) == name.dropLast(".json".count)
         else { return nil }
@@ -129,7 +151,8 @@ public final class SessionMonitor: SessionMonitoring, @unchecked Sendable {
               data.count <= 262_144,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
-        return (pid, object["status"] as? String, object["procStart"] as? String)
+        return (pid, object["status"] as? String, object["procStart"] as? String,
+                object["name"] as? String, object["cwd"] as? String)
     }
 
     private func logUnknown(_ status: String?) {

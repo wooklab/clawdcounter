@@ -89,12 +89,14 @@ public final class MenuBuilder {
         return [item]
     }
 
-    /// 활성+총량: `크레딧 $12.50 / $100.00`, 활성+총량 없음: `크레딧 $12.50 사용`, 비활성: `크레딧 $0.00 (추가 사용 꺼짐)`.
+    /// 총량 있음: `크레딧 $12.50 / $100.00`(비활성이면 뒤에 ` (사용 불가)`).
+    /// 총량 없음: 활성 `크레딧 $12.50 사용`, 비활성 `크레딧 $0.00 (추가 사용 꺼짐)`.
     static func creditText(_ c: CreditUsage) -> String {
         let used = money(c.used, unit: c.unit)
-        guard c.isEnabled else { return "크레딧 \(used) (추가 사용 꺼짐)" }
-        if let total = c.total { return "크레딧 \(used) / \(money(total, unit: c.unit))" }
-        return "크레딧 \(used) 사용"
+        if let total = c.total {
+            return "크레딧 \(used) / \(money(total, unit: c.unit))" + (c.isEnabled ? "" : " (사용 불가)")
+        }
+        return c.isEnabled ? "크레딧 \(used) 사용" : "크레딧 \(used) (추가 사용 꺼짐)"
     }
 
     /// USD 는 `$12.50`, 그 외 통화는 `12.50 EUR`, 통화 없으면 `12.50`.
@@ -110,7 +112,7 @@ public final class MenuBuilder {
     }
 
     private func sessionSection(_ s: SessionCounts) -> [NSMenuItem] {
-        [Self.sessionItem(s)]
+        Self.sessionItems(s)
     }
 
     private func settingsSection(auth: AuthState, target: MenuTarget) -> [NSMenuItem] {
@@ -162,12 +164,57 @@ public final class MenuBuilder {
         return item
     }
 
-    /// 세션 한 줄: 커스텀 뷰 행. title/접근성에는 평문을 넣는다. 세 항목은 0 이어도 항상 표시한다.
-    static func sessionItem(_ s: SessionCounts) -> NSMenuItem {
-        let item = NSMenuItem(title: SessionRowView.plainText(s), action: nil, keyEquivalent: "")
+    /// 상태별 최대 나열 개수 / 세션명 최대 글자 수.
+    static let maxNamesPerState = 8
+    static let maxNameLength = 40
+    static let nameIndent = "    "
+
+    /// 세션 구획: 상태마다 헤더 줄(`● 활성 2`) + 세션명 줄(`    · 이름`, 최대 8개, 초과 시 `    외 N개`).
+    /// 세 헤더는 개수가 0 이어도 항상 표시한다. 항목은 모두 비활성 평문 항목(title 은 평문, 색은 attributedTitle).
+    static func sessionItems(_ s: SessionCounts) -> [NSMenuItem] {
+        let groups: [(dot: String, color: NSColor, label: String, count: Int, names: [String])] = [
+            ("●", .systemGreen, "활성", s.active, s.activeNames),
+            ("●", .systemYellow, "응답대기", s.waiting, s.waitingNames),
+            ("○", .labelColor, "비활성", s.idle, s.idleNames),
+        ]
+        var items: [NSMenuItem] = []
+        for g in groups {
+            let header = textItem("\(g.dot) \(g.label) \(g.count)", color: .labelColor, dot: (g.dot, g.color))
+            header.setAccessibilityLabel("\(g.label) 세션 \(g.count)개")
+            items.append(header)
+            for name in g.names.prefix(maxNamesPerState) {
+                let shown = displayName(name)
+                let item = textItem("\(nameIndent)· \(shown)", color: .secondaryLabelColor)
+                item.setAccessibilityLabel("세션 \(shown)")
+                items.append(item)
+            }
+            let extra = g.names.count - maxNamesPerState
+            if extra > 0 {
+                let item = textItem("\(nameIndent)외 \(extra)개", color: .secondaryLabelColor)
+                item.setAccessibilityLabel("그 밖에 \(g.label) 세션 \(extra)개")
+                items.append(item)
+            }
+        }
+        return items
+    }
+
+    /// 줄바꿈·탭은 공백으로, 40자 초과는 39자 + `…`.
+    static func displayName(_ name: String) -> String {
+        let flat = String(name.map { $0.isNewline || $0 == "\t" ? " " : $0 })
+        guard flat.count > maxNameLength else { return flat }
+        return String(flat.prefix(maxNameLength - 1)) + "…"
+    }
+
+    /// 비활성 평문 항목. `title` 은 평문이고 `attributedTitle` 은 같은 문자열에 색만 입힌다(점 색 `dot` 은 선두 글자).
+    private static func textItem(_ title: String, color: NSColor, dot: (symbol: String, color: NSColor)? = nil) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
-        item.view = SessionRowView(counts: s)
-        item.setAccessibilityLabel(SessionRowView.accessibilityText(s))
+        let font = NSFont.menuFont(ofSize: 0)
+        let text = NSMutableAttributedString(string: title, attributes: [.foregroundColor: color, .font: font])
+        if let dot, title.hasPrefix(dot.symbol) {
+            text.addAttribute(.foregroundColor, value: dot.color, range: NSRange(location: 0, length: (dot.symbol as NSString).length))
+        }
+        item.attributedTitle = text
         return item
     }
 

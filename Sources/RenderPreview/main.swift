@@ -12,7 +12,10 @@ func win(_ pct: Double, in seconds: TimeInterval) -> LimitWindow {
     LimitWindow(usedPercent: pct, resetsAt: now.addingTimeInterval(seconds))
 }
 let h: TimeInterval = 3600
-let counts = SessionCounts(active: 2, waiting: 1, idle: 4)
+let counts = SessionCounts(
+    active: 2, waiting: 1, idle: 4,
+    activeNames: ["clawdcounter 드롭다운", "맥북 메뉴바 표시 제거"], waitingNames: ["상태바 앱 이름 추천"],
+    idleNames: ["btw: sfltool 권한", "docs", "refactor-auth", "이름 없음"])
 
 let full = UsageSnapshot(
     fiveHour: win(42, in: 2 * h + 13 * 60),
@@ -46,6 +49,7 @@ let fiveHourInactive = UsageSnapshot(
     fiveHour: LimitWindow(usedPercent: 0, resetsAt: nil), weekly: win(5, in: 6 * 86400 + 4 * h),
     credit: CreditUsage(used: 0, total: nil, unit: "USD", isEnabled: false), fetchedAt: now)
 var creditNoTotal = full; creditNoTotal.credit = CreditUsage(used: 12.5, total: nil, unit: "USD")
+var creditDisabledWithTotal = full; creditDisabledWithTotal.credit = CreditUsage(used: 0, total: 20, unit: "USD", isEnabled: false)
 var creditEUR = full; creditEUR.credit = CreditUsage(used: 12.5, total: 100, unit: "EUR")
 
 // 단계별 확인: 5시간·주간이 같은 값, 그리고 서로 다른 단계 조합
@@ -64,6 +68,7 @@ let cases: [Case] = levelCases + [
     Case(name: "five-hour-inactive", usage: fiveHourInactive, sessions: counts, auth: .signedIn),
     Case(name: "no-five-hour", usage: noFive, sessions: counts, auth: .signedIn),
     Case(name: "credit-disabled", usage: fiveHourInactive, sessions: counts, auth: .signedIn),
+    Case(name: "credit-disabled-with-total", usage: creditDisabledWithTotal, sessions: counts, auth: .signedIn),
     Case(name: "credit-no-total", usage: creditNoTotal, sessions: counts, auth: .signedIn),
     Case(name: "credit-eur", usage: creditEUR, sessions: counts, auth: .signedIn),
     Case(name: "no-fable", usage: noFable, sessions: counts, auth: .signedIn),
@@ -208,29 +213,51 @@ for mode in Mode.allCases {
     }
 }
 
-// 세션 한 줄: 세션 행 뷰를 배경 위에 캐시 렌더 (build/preview/menu-sessions-<case>-<light|dark>.png)
+// 세션 구획: 헤더+세션명 평문 항목(attributedTitle)을 같은 방식으로 그려 PNG 저장
+// (build/preview/menu-sessions-<case>-<light|dark>.png)
 @MainActor func sessionsPNG(_ s: SessionCounts, mode: Mode) -> Data {
     let menu = MenuBuilder(actions: nil).buildMenu(usage: nil, sessions: s, auth: .signedOut, now: now)
-    let v = menu.items.first { $0.title.contains("응답대기") }!.view!
-    let width = max(v.frame.width, 260), height = v.frame.height
-    v.frame.size.width = width
-    let root = PreviewBackdrop(frame: v.bounds)
-    root.color = mode.background
-    root.appearance = mode.appearance
-    root.addSubview(v)
+    // 로그인 안내와 설정 구획 사이: 첫 구분선 다음 ~ 둘째 구분선 앞
+    let section = menu.items.drop { !$0.isSeparatorItem }.dropFirst().prefix { !$0.isSeparatorItem }
+    let rowH: CGFloat = 22, inset: CGFloat = 14
+    let texts = section.compactMap(\.attributedTitle)
+    let width = max(ceil((texts.map { $0.size().width }.max() ?? 0)) + inset * 2, 260)
+    let height = rowH * CGFloat(texts.count) + 12
     let rep = NSBitmapImageRep(
         bitmapDataPlanes: nil, pixelsWide: Int(width) * scale, pixelsHigh: Int(height) * scale,
         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
-    rep.size = v.bounds.size
-    root.cacheDisplay(in: root.bounds, to: rep)
+    rep.size = NSSize(width: width, height: height)
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    mode.appearance.performAsCurrentDrawingAppearance {
+        mode.background.setFill()
+        NSRect(x: 0, y: 0, width: width, height: height).fill()
+        for (i, t) in texts.enumerated() {
+            let size = t.size()
+            let y = height - 6 - rowH * CGFloat(i + 1) + ((rowH - size.height) / 2).rounded()
+            t.draw(at: NSPoint(x: inset, y: y))
+        }
+    }
+    NSGraphicsContext.restoreGraphicsState()
     return rep.representation(using: .png, properties: [:])!
 }
 
+func sessionNames(_ prefix: String, _ n: Int) -> [String] { (1...max(n, 1)).prefix(n).map { "\(prefix)\($0)" } }
+let longKo = "아주 긴 세션 이름입니다 이것은 사십 자를 훨씬 넘기는 한국어 세션 이름이며 말줄임이 되어야 합니다"
+let longEn = "a-very-long-session-name-that-goes-well-beyond-forty-characters-for-sure"
 let sessionCases: [(String, SessionCounts)] = [
-    ("2-1-4", SessionCounts(active: 2, waiting: 1, idle: 4)),
-    ("0-0-0", SessionCounts(active: 0, waiting: 0, idle: 0)),
-    ("12-10-25", SessionCounts(active: 12, waiting: 10, idle: 25)),
+    ("names", SessionCounts(
+        active: 2, waiting: 1, idle: 4,
+        activeNames: ["clawdcounter 드롭다운", "맥북 메뉴바 표시 제거"], waitingNames: ["상태바 앱 이름 추천"],
+        idleNames: ["btw: sfltool 권한", "docs", "refactor-auth", "이름 없음"])),
+    ("over8", SessionCounts(
+        active: 12, waiting: 1, idle: 9,
+        activeNames: sessionNames("작업 ", 12), waitingNames: ["대기 세션"], idleNames: sessionNames("idle-", 9))),
+    ("zero", SessionCounts(active: 0, waiting: 0, idle: 0)),
+    ("only-idle", SessionCounts(active: 0, waiting: 0, idle: 2, idleNames: ["a", "b"])),
+    ("long-name", SessionCounts(
+        active: 2, waiting: 0, idle: 1, activeNames: [longKo, longEn], idleNames: ["짧은 이름"])),
 ]
 for mode in Mode.allCases {
     for (name, s) in sessionCases {
@@ -256,6 +283,10 @@ for c in cases {
         usage: c.usage, sessions: c.sessions, auth: c.auth,
         settings: MenuSettings(launchAtLogin: true, refreshMinutes: 2), now: now)
     dump += "## \(c.name)\n\(MenuDump.text(of: menu))\n\n"
+}
+for (name, sessions) in sessionCases {
+    let menu = builder.buildMenu(usage: nil, sessions: sessions, auth: .signedOut, now: now)
+    dump += "## sessions-\(name)\n\(MenuDump.text(of: menu))\n\n"
 }
 let dumpURL = outDir.appendingPathComponent("menus.txt")
 try dump.write(to: dumpURL, atomically: true, encoding: .utf8)

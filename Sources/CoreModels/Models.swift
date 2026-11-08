@@ -59,10 +59,20 @@ public struct SessionCounts: Equatable, Sendable {
     public var active: Int
     public var waiting: Int
     public var idle: Int
-    public init(active: Int, waiting: Int, idle: Int) {
+    /// 상태별 세션명(정렬된 순서). 개수 필드와 별개로 보관하며, 모니터는 항상 `names.count == 개수`로 채운다.
+    public var activeNames: [String]
+    public var waitingNames: [String]
+    public var idleNames: [String]
+    public init(
+        active: Int, waiting: Int, idle: Int,
+        activeNames: [String] = [], waitingNames: [String] = [], idleNames: [String] = []
+    ) {
         self.active = active
         self.waiting = waiting
         self.idle = idle
+        self.activeNames = activeNames
+        self.waitingNames = waitingNames
+        self.idleNames = idleNames
     }
 }
 

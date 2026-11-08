@@ -36,6 +36,15 @@ final class UsageMappingRealResponseTests: XCTestCase {
         ])
     }
 
+    /// 최신 실제 응답: `spend.limit` = $20.00, 사용 $0, 비활성(out_of_credits).
+    /// `spend.limit` 이 총량으로 매핑되어야 하고(`extra_usage.monthly_limit` 는 보조라 비활성이면 쓰지 않는다), 비활성 여부도 유지된다.
+    func testRealResponseWithSpendLimitMapsTotalAndDisabled() throws {
+        let r = try UsageMapping.map(try fixture("usage_with_limit.json"), fetchedAt: fixedNow)
+        XCTAssertEqual(r.snapshot.credit, CreditUsage(used: 0, total: 20, unit: "USD", isEnabled: false))
+        XCTAssertEqual(r.snapshot.fiveHour?.usedPercent, 23)
+        XCTAssertEqual(r.snapshot.weekly?.usedPercent, 8)
+    }
+
     // MARK: - limits 폴백
 
     func testLimitsFallbackWhenTopLevelMissing() throws {

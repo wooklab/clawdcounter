@@ -36,9 +36,13 @@ private func deadPid() throws -> Int {
     return Int(p.processIdentifier)
 }
 
-private func write(_ dir: URL, pid: Int, status: String?, procStart: String? = nil, atomic: Bool = true) throws {
+private func write(
+    _ dir: URL, pid: Int, status: String?, procStart: String? = nil, name: String? = nil, cwd: String? = nil, atomic: Bool = true
+) throws {
     var obj: [String: Any] = ["pid": pid, "sessionId": "s-\(pid)", "kind": "interactive"]
     if let status { obj["status"] = status }
+    if let name { obj["name"] = name }
+    if let cwd { obj["cwd"] = cwd }
     if let procStart { obj["procStart"] = procStart }
     let data = try JSONSerialization.data(withJSONObject: obj)
     try data.write(to: dir.appendingPathComponent("\(pid).json"), options: atomic ? .atomic : [])
@@ -53,7 +57,9 @@ private func waitUntil(timeout: TimeInterval = 5, _ cond: () -> Bool) async -> B
     return cond()
 }
 
-private func counts(_ a: Int, _ w: Int, _ i: Int) -> SessionCounts { SessionCounts(active: a, waiting: w, idle: i) }
+private extension SessionCounts {
+    var numbers: [Int] { [active, waiting, idle] }
+}
 
 private func formatProcStart(_ date: Date, utc: Bool) -> String {
     var cal = Calendar(identifier: .gregorian)
@@ -91,7 +97,7 @@ final class SessionMonitorTests: XCTestCase {
         let m = monitor(dir)
         let (e, task) = collect(m)
         m.start(); defer { m.stop(); task.cancel() }
-        let ok = await waitUntil { e.latest == counts(2, 1, 2) }
+        let ok = await waitUntil { e.latest?.numbers == [2, 1, 2] }
         XCTAssertTrue(ok, "emitted: \(e.all)")
     }
 
@@ -105,7 +111,7 @@ final class SessionMonitorTests: XCTestCase {
         let m = monitor(dir)
         let (e, task) = collect(m)
         m.start(); defer { m.stop(); task.cancel() }
-        let ok = await waitUntil { e.latest == counts(0, 0, 2) }
+        let ok = await waitUntil { e.latest?.numbers == [0, 0, 2] }
         XCTAssertTrue(ok, "emitted: \(e.all)")
     }
 
@@ -117,7 +123,7 @@ final class SessionMonitorTests: XCTestCase {
         let m = monitor(dir, mapping: StatusMapping(waiting: ["waiting", "needs_input"]))
         let (e, task) = collect(m)
         m.start(); defer { m.stop(); task.cancel() }
-        let ok = await waitUntil { e.latest == counts(0, 1, 0) }
+        let ok = await waitUntil { e.latest?.numbers == [0, 1, 0] }
         XCTAssertTrue(ok, "emitted: \(e.all)")
     }
 
@@ -130,7 +136,7 @@ final class SessionMonitorTests: XCTestCase {
         let m = monitor(dir)
         let (e, task) = collect(m)
         m.start(); defer { m.stop(); task.cancel() }
-        let ok = await waitUntil { e.latest == counts(1, 0, 0) }
+        let ok = await waitUntil { e.latest?.numbers == [1, 0, 0] }
         XCTAssertTrue(ok, "emitted: \(e.all)")
     }
 
@@ -142,7 +148,7 @@ final class SessionMonitorTests: XCTestCase {
         let m = monitor(dir)
         let (e, task) = collect(m)
         m.start(); defer { m.stop(); task.cancel() }
-        let ok = await waitUntil { e.latest == counts(0, 0, 1) }
+        let ok = await waitUntil { e.latest?.numbers == [0, 0, 1] }
         XCTAssertTrue(ok, "emitted: \(e.all)")
     }
 
@@ -159,7 +165,7 @@ final class SessionMonitorTests: XCTestCase {
         let m = monitor(dir)
         let (e, task) = collect(m)
         m.start(); defer { m.stop(); task.cancel() }
-        let ok = await waitUntil { e.latest == counts(2, 0, 0) }
+        let ok = await waitUntil { e.latest?.numbers == [2, 0, 0] }
         XCTAssertTrue(ok, "emitted: \(e.all)")
     }
 
@@ -182,7 +188,7 @@ final class SessionMonitorTests: XCTestCase {
         let m = monitor(dir)
         let (e, task) = collect(m)
         m.start(); defer { m.stop(); task.cancel() }
-        let ok = await waitUntil { e.latest == counts(1, 0, 0) }
+        let ok = await waitUntil { e.latest?.numbers == [1, 0, 0] }
         XCTAssertTrue(ok, "emitted: \(e.all)")
     }
 
@@ -191,7 +197,7 @@ final class SessionMonitorTests: XCTestCase {
         let m = monitor(dir)
         let (e, task) = collect(m)
         m.start(); defer { m.stop(); task.cancel() }
-        let ok = await waitUntil { e.latest == counts(0, 0, 0) }
+        let ok = await waitUntil { e.latest?.numbers == [0, 0, 0] }
         XCTAssertTrue(ok, "emitted: \(e.all)")
     }
 
@@ -205,22 +211,22 @@ final class SessionMonitorTests: XCTestCase {
         let m = monitor(dir)
         let (e, task) = collect(m)
         m.start(); defer { m.stop(); task.cancel() }
-        var ok = await waitUntil { e.latest == counts(0, 0, 0) }
+        var ok = await waitUntil { e.latest?.numbers == [0, 0, 0] }
         XCTAssertTrue(ok, "initial: \(e.all)")
 
         // 새 파일
         try write(dir, pid: pids[0], status: "idle")
-        ok = await waitUntil { e.latest == counts(0, 0, 1) }
+        ok = await waitUntil { e.latest?.numbers == [0, 0, 1] }
         XCTAssertTrue(ok, "new file: \(e.all)")
 
         // 제자리(비원자) 수정: idle -> busy
         try write(dir, pid: pids[0], status: "busy", atomic: false)
-        ok = await waitUntil { e.latest == counts(1, 0, 0) }
+        ok = await waitUntil { e.latest?.numbers == [1, 0, 0] }
         XCTAssertTrue(ok, "in-place edit: \(e.all)")
 
         // 원자적 교체: busy -> waiting
         try write(dir, pid: pids[0], status: "waiting", atomic: true)
-        ok = await waitUntil { e.latest == counts(0, 1, 0) }
+        ok = await waitUntil { e.latest?.numbers == [0, 1, 0] }
         XCTAssertTrue(ok, "atomic replace: \(e.all)")
 
         // 결과가 같은 변경은 emit 안 함
@@ -231,7 +237,7 @@ final class SessionMonitorTests: XCTestCase {
 
         // 삭제
         try FileManager.default.removeItem(at: dir.appendingPathComponent("\(pids[0]).json"))
-        ok = await waitUntil { e.latest == counts(0, 0, 0) }
+        ok = await waitUntil { e.latest?.numbers == [0, 0, 0] }
         XCTAssertTrue(ok, "delete: \(e.all)")
     }
 
@@ -243,10 +249,10 @@ final class SessionMonitorTests: XCTestCase {
         let m = SessionMonitor(directory: dir, statusMapping: .default, debounce: 0.1, rescanInterval: 0.3)
         let (e, task) = collect(m)
         m.start(); defer { m.stop(); task.cancel() }
-        var ok = await waitUntil { e.latest == counts(1, 0, 0) }
+        var ok = await waitUntil { e.latest?.numbers == [1, 0, 0] }
         XCTAssertTrue(ok, "alive: \(e.all)")
         p.terminate(); p.waitUntilExit() // 파일 변경 없이 프로세스만 종료
-        ok = await waitUntil { e.latest == counts(0, 0, 0) }
+        ok = await waitUntil { e.latest?.numbers == [0, 0, 0] }
         XCTAssertTrue(ok, "after death: \(e.all)")
     }
 
@@ -259,7 +265,7 @@ final class SessionMonitorTests: XCTestCase {
         m.start(); defer { m.stop() }
         let (e, task) = collect(m) // start 이후 구독
         defer { task.cancel() }
-        let ok = await waitUntil { e.latest == counts(1, 0, 0) }
+        let ok = await waitUntil { e.latest?.numbers == [1, 0, 0] }
         XCTAssertTrue(ok, "emitted: \(e.all)")
     }
 
@@ -270,14 +276,14 @@ final class SessionMonitorTests: XCTestCase {
         let m = monitor(dir)
         let (e, task) = collect(m)
         m.start(); defer { task.cancel() }
-        var ok = await waitUntil { e.latest == counts(0, 0, 0) }
+        var ok = await waitUntil { e.latest?.numbers == [0, 0, 0] }
         XCTAssertTrue(ok)
         m.stop()
         try write(dir, pid: Int(p.processIdentifier), status: "busy")
         try await Task.sleep(nanoseconds: 600_000_000)
-        XCTAssertEqual(e.latest, counts(0, 0, 0))
+        XCTAssertEqual(e.latest?.numbers, [0, 0, 0])
         m.start() // 재시작 가능
-        ok = await waitUntil { e.latest == counts(1, 0, 0) }
+        ok = await waitUntil { e.latest?.numbers == [1, 0, 0] }
         m.stop()
         XCTAssertTrue(ok, "restart: \(e.all)")
     }
@@ -296,7 +302,7 @@ final class SessionMonitorTests: XCTestCase {
             let stream = m.countsStream()
             task = Task { for await c in stream { e.append(c) } }
             m.start() // stop() 호출 없이 스코프 종료
-            let ok = await waitUntil { e.latest == counts(0, 0, 0) }
+            let ok = await waitUntil { e.latest?.numbers == [0, 0, 0] }
             XCTAssertTrue(ok, "initial: \(e.all)")
         }
         defer { task?.cancel() }
@@ -308,6 +314,102 @@ final class SessionMonitorTests: XCTestCase {
         }
         try await Task.sleep(nanoseconds: 600_000_000)
         XCTAssertEqual(e.all.count, before, "no emission after release: \(e.all)")
+    }
+}
+
+final class SessionNamesTests: XCTestCase {
+    private func monitor(_ dir: URL) -> SessionMonitor {
+        SessionMonitor(directory: dir, statusMapping: .default, debounce: 0.1, rescanInterval: 60)
+    }
+
+    func testDisplayNameFallbackRules() {
+        typealias M = SessionMonitor
+        XCTAssertEqual(M.displayName(name: "내 세션", cwd: "/a/b"), "내 세션")
+        XCTAssertEqual(M.displayName(name: "  내 세션 \n", cwd: "/a/b"), "내 세션")
+        XCTAssertEqual(M.displayName(name: "", cwd: "/a/proj"), "proj")
+        XCTAssertEqual(M.displayName(name: "   ", cwd: "/a/proj/"), "proj")
+        XCTAssertEqual(M.displayName(name: nil, cwd: "/a/proj"), "proj")
+        XCTAssertEqual(M.displayName(name: nil, cwd: "/"), "이름 없음")
+        XCTAssertEqual(M.displayName(name: nil, cwd: ""), "이름 없음")
+        XCTAssertEqual(M.displayName(name: nil, cwd: nil), "이름 없음")
+    }
+
+    func testNamesGroupedByStatusSortedWithFallbacks() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let procs = try (0..<6).map { _ in try spawnSleeper() }
+        defer { procs.forEach { $0.terminate() } }
+        let p = procs.map { Int($0.processIdentifier) }
+        try write(dir, pid: p[0], status: "busy", name: "beta")
+        try write(dir, pid: p[1], status: "shell", name: "Alpha")
+        try write(dir, pid: p[2], status: "waiting", name: "", cwd: "/work/clawdcounter")
+        try write(dir, pid: p[3], status: "idle")                                  // 이름·cwd 없음
+        try write(dir, pid: p[4], status: "idle", name: "세션 10")
+        try write(dir, pid: p[5], status: "idle", name: "세션 2")                   // 숫자 순서: 2 < 10
+        let m = monitor(dir)
+        let e = Emissions()
+        let stream = m.countsStream()
+        let task = Task { for await c in stream { e.append(c) } }
+        m.start(); defer { m.stop(); task.cancel() }
+        let ok = await waitUntil { e.latest?.numbers == [2, 1, 3] }
+        XCTAssertTrue(ok, "emitted: \(e.all)")
+        let latest = try XCTUnwrap(e.latest)
+        XCTAssertEqual(latest.activeNames, ["Alpha", "beta"])
+        XCTAssertEqual(latest.waitingNames, ["clawdcounter"])
+        XCTAssertEqual(latest.idleNames, ["세션 2", "세션 10", "이름 없음"].sorted {
+            $0.compare($1, options: [.caseInsensitive, .numeric]) == .orderedAscending
+        })
+    }
+
+    func testEqualNamesOrderedByPid() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let procs = try (0..<3).map { _ in try spawnSleeper() }
+        defer { procs.forEach { $0.terminate() } }
+        for proc in procs { try write(dir, pid: Int(proc.processIdentifier), status: "idle", name: "same") }
+        let m = monitor(dir)
+        let e = Emissions()
+        let stream = m.countsStream()
+        let task = Task { for await c in stream { e.append(c) } }
+        m.start(); defer { m.stop(); task.cancel() }
+        let ok = await waitUntil { e.latest?.numbers == [0, 0, 3] }
+        XCTAssertTrue(ok, "emitted: \(e.all)")
+        XCTAssertEqual(e.latest?.idleNames, ["same", "same", "same"])
+    }
+
+    /// 상태·개수가 같아도 이름만 바뀌면 emit 한다.
+    func testRenameAloneEmits() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let proc = try spawnSleeper(); defer { proc.terminate() }
+        let pid = Int(proc.processIdentifier)
+        try write(dir, pid: pid, status: "idle", name: "old")
+        let m = monitor(dir)
+        let e = Emissions()
+        let stream = m.countsStream()
+        let task = Task { for await c in stream { e.append(c) } }
+        m.start(); defer { m.stop(); task.cancel() }
+        var ok = await waitUntil { e.latest?.idleNames == ["old"] }
+        XCTAssertTrue(ok, "initial: \(e.all)")
+        try write(dir, pid: pid, status: "idle", name: "new")
+        ok = await waitUntil { e.latest?.idleNames == ["new"] }
+        XCTAssertTrue(ok, "rename: \(e.all)")
+        XCTAssertEqual(e.latest?.numbers, [0, 0, 1])
+    }
+
+    func testDeadPidNameExcluded() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let alive = try spawnSleeper(); defer { alive.terminate() }
+        try write(dir, pid: Int(alive.processIdentifier), status: "busy", name: "alive")
+        try write(dir, pid: try deadPid(), status: "busy", name: "dead")
+        let m = monitor(dir)
+        let e = Emissions()
+        let stream = m.countsStream()
+        let task = Task { for await c in stream { e.append(c) } }
+        m.start(); defer { m.stop(); task.cancel() }
+        let ok = await waitUntil { e.latest?.activeNames == ["alive"] }
+        XCTAssertTrue(ok, "emitted: \(e.all)")
     }
 }
 
