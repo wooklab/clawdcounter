@@ -6,6 +6,14 @@
 
 Claude 사용량 한도와 로컬 Claude Code 세션 현황을 macOS 메뉴바에 보여주는 비공식 앱입니다.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme-menu-dark.png">
+    <img src="docs/images/readme-menu-light.png" alt="메뉴바 항목과 펼친 드롭다운 메뉴" width="380">
+  </picture>
+</p>
+<p align="center"><sub>예시 데이터로 렌더링한 화면입니다.</sub></p>
+
 ## 기능
 
 - **메뉴바 표기**: `5시간 한도 남은 시간 | [5시간 바 / 주간 바] | ● 활성 수 / ○ 비활성 수 | ✋ 응답대기`
@@ -114,7 +122,7 @@ swift test                  # 전체 단위 테스트
 swift run RenderPreview     # 메뉴바 이미지/드롭다운 PNG 렌더 -> build/preview/
 ```
 
-`RenderPreview`는 프로젝트 루트에서 실행해야 하며, 라이트/다크별 PNG와 메뉴 구조 텍스트(`menus.txt`)를 `build/preview/`에 만듭니다.
+`RenderPreview`는 프로젝트 루트에서 실행해야 하며, 라이트/다크별 PNG와 메뉴 구조 텍스트(`menus.txt`)를 `build/preview/`에 만듭니다. README에 들어가는 화면 이미지(`docs/images/readme-menu-*.png`)도 함께 다시 만듭니다.
 
 ### `--probe-usage` 진단 플래그
 
