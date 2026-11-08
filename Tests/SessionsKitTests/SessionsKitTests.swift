@@ -39,12 +39,14 @@ private func deadPid() throws -> Int {
 }
 
 private func write(
-    _ dir: URL, pid: Int, status: String?, procStart: String? = nil, name: String? = nil, cwd: String? = nil, atomic: Bool = true
+    _ dir: URL, pid: Int, status: String?, procStart: String? = nil, name: String? = nil, cwd: String? = nil,
+    entrypoint: String? = nil, atomic: Bool = true
 ) throws {
     var obj: [String: Any] = ["pid": pid, "sessionId": "s-\(pid)", "kind": "interactive"]
     if let status { obj["status"] = status }
     if let name { obj["name"] = name }
     if let cwd { obj["cwd"] = cwd }
+    if let entrypoint { obj["entrypoint"] = entrypoint }
     if let procStart { obj["procStart"] = procStart }
     let data = try JSONSerialization.data(withJSONObject: obj)
     try data.write(to: dir.appendingPathComponent("\(pid).json"), options: atomic ? .atomic : [])
@@ -712,5 +714,107 @@ final class SubagentCountingTests: XCTestCase {
         XCTAssertEqual(SessionMonitor.subagentName(description: " 작업 "), "↳ 작업")
         XCTAssertEqual(SessionMonitor.subagentName(description: ""), "↳ 서브에이전트")
         XCTAssertEqual(SessionMonitor.subagentName(description: nil), "↳ 서브에이전트")
+    }
+}
+
+// MARK: - 구조화 세션 정보(SessionRef)
+
+final class SessionRefTests: XCTestCase {
+    private func monitor(_ dir: URL, _ projects: URL? = nil) -> SessionMonitor {
+        SessionMonitor(directory: dir, projectsDirectory: projects ?? noProjectsDir(), statusMapping: .default, debounce: 0.1, rescanInterval: 60)
+    }
+
+    func testRefsCarryPidAndEntrypointAndSubagentParent() async throws {
+        let (dir, projects) = (try makeTempDir(), try makeTempDir())
+        defer { [dir, projects].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let procs = try (0..<3).map { _ in try spawnSleeper() }
+        defer { procs.forEach { $0.terminate() } }
+        let p = procs.map { Int($0.processIdentifier) }
+        try write(dir, pid: p[0], status: "busy", name: "데스크탑", entrypoint: "claude-desktop")
+        try write(dir, pid: p[1], status: "waiting", name: "터미널", entrypoint: "cli")
+        try write(dir, pid: p[2], status: "idle", name: "구버전")                       // entrypoint 없음
+        let sub = projects.appendingPathComponent("-proj/s-\(p[0])/subagents", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: ["description": "조사"]).write(to: sub.appendingPathComponent("agent-a.meta.json"))
+        try Data("{}\n".utf8).write(to: sub.appendingPathComponent("agent-a.jsonl"))
+
+        let m = monitor(dir, projects)
+        let e = Emissions()
+        let stream = m.countsStream()
+        let task = Task { for await c in stream { e.append(c) } }
+        m.start(); defer { m.stop(); task.cancel() }
+        let ok = await waitUntil { e.latest?.numbers == [2, 1, 1] }
+        XCTAssertTrue(ok, "emitted: \(e.all)")
+        let latest = try XCTUnwrap(e.latest)
+        XCTAssertEqual(latest.activeSessions, [
+            SessionRef(name: "데스크탑", pid: Int32(p[0]), entrypoint: "claude-desktop"),
+            SessionRef(name: "↳ 조사", pid: nil, entrypoint: "claude-desktop", isSubagent: true, parentPid: Int32(p[0])),
+        ])
+        XCTAssertEqual(latest.waitingSessions, [SessionRef(name: "터미널", pid: Int32(p[1]), entrypoint: "cli")])
+        XCTAssertEqual(latest.idleSessions, [SessionRef(name: "구버전", pid: Int32(p[2]), entrypoint: nil)])
+        XCTAssertEqual(latest.activeNames, ["데스크탑", "↳ 조사"])
+    }
+}
+
+// MARK: - 부모 사슬 탐색
+
+final class ProcessAncestryTests: XCTestCase {
+    /// 가짜 프로세스 트리: pid -> ppid
+    private func walk(
+        _ pid: Int32, tree: [Int32: Int32], apps: Set<Int32>, maxDepth: Int = ProcessAncestry.maxDepth
+    ) -> Int32? {
+        ProcessAncestry.firstAncestor(of: pid, maxDepth: maxDepth, parentOf: { tree[$0] }, matches: { apps.contains($0) })
+    }
+
+    func testDirectParentApp() {
+        XCTAssertEqual(walk(300, tree: [300: 200, 200: 1], apps: [200]), 200)
+    }
+
+    func testSelfMatchesFirst() {
+        XCTAssertEqual(walk(300, tree: [300: 200, 200: 1], apps: [300, 200]), 300)
+    }
+
+    func testMultipleLevelsPicksNearestApp() {
+        // claude(500) -> zsh(400) -> login(300) -> Terminal(200) -> launchd(1);  상위의 다른 앱(150)보다 가까운 쪽
+        let tree: [Int32: Int32] = [500: 400, 400: 300, 300: 200, 200: 150, 150: 1]
+        XCTAssertEqual(walk(500, tree: tree, apps: [200, 150]), 200)
+    }
+
+    func testNoAppReturnsNilAndStopsAtLaunchd() {
+        var asked: [Int32] = []
+        let r = ProcessAncestry.firstAncestor(of: 500, parentOf: { asked.append($0); return [500: 400, 400: 1, 1: 0][$0] }, matches: { _ in false })
+        XCTAssertNil(r)
+        XCTAssertEqual(asked, [500, 400]) // pid 1 에서 멈춘다(부모 조회 안 함)
+    }
+
+    func testLaunchdIsNeverMatched() {
+        XCTAssertNil(walk(400, tree: [400: 1], apps: [1]))
+    }
+
+    func testCycleTerminates() {
+        var calls = 0
+        let r = ProcessAncestry.firstAncestor(of: 10, parentOf: { calls += 1; return [10: 20, 20: 30, 30: 10][$0] }, matches: { _ in false })
+        XCTAssertNil(r)
+        XCTAssertEqual(calls, 3)
+        XCTAssertNil(walk(7, tree: [7: 7], apps: []))
+    }
+
+    func testDepthCap() {
+        // 100 -> 99 -> ... -> 2, 앱은 맨 끝(2)
+        let tree = Dictionary(uniqueKeysWithValues: (3...100).map { (Int32($0), Int32($0 - 1)) })
+        XCTAssertEqual(walk(100, tree: tree, apps: [2], maxDepth: 200), 2)
+        XCTAssertNil(walk(100, tree: tree, apps: [2])) // 기본 상한(32단계) 안에서는 도달 못함
+        XCTAssertEqual(walk(100, tree: tree, apps: [100 - 31]), 69) // 32번째 단계까지는 도달
+        XCTAssertNil(walk(100, tree: tree, apps: [100 - 32]))
+    }
+
+    func testParentLookupFailureReturnsNil() {
+        XCTAssertNil(walk(300, tree: [:], apps: [200]))
+    }
+
+    func testRealParentPidMatchesGetppid() {
+        XCTAssertEqual(ProcessAncestry.parentPid(of: getpid()), getppid())
+        XCTAssertNil(ProcessAncestry.parentPid(of: 0))
+        XCTAssertNil(ProcessAncestry.parentPid(of: Int32.max))
     }
 }

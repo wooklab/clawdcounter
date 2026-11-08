@@ -55,24 +55,62 @@ public struct UsageSnapshot: Equatable, Sendable {
     }
 }
 
+/// 드롭다운에 나열되는 세션 한 건의 구조화 정보.
+public struct SessionRef: Equatable, Sendable {
+    public var name: String
+    public var pid: Int32?
+    public var entrypoint: String?
+    public var isSubagent: Bool
+    /// 서브에이전트일 때 부모 세션의 pid.
+    public var parentPid: Int32?
+    public init(name: String, pid: Int32? = nil, entrypoint: String? = nil, isSubagent: Bool = false, parentPid: Int32? = nil) {
+        self.name = name
+        self.pid = pid
+        self.entrypoint = entrypoint
+        self.isSubagent = isSubagent
+        self.parentPid = parentPid
+    }
+
+    /// 앞으로 가져올 앱을 찾는 출발 pid: 서브에이전트는 부모 세션, 그 밖에는 자기 자신.
+    public var focusPid: Int32? { isSubagent ? parentPid : pid }
+}
+
 public struct SessionCounts: Equatable, Sendable {
     public var active: Int
     public var waiting: Int
     public var idle: Int
-    /// 상태별 세션명(정렬된 순서). 개수 필드와 별개로 보관하며, 모니터는 항상 `names.count == 개수`로 채운다.
-    public var activeNames: [String]
-    public var waitingNames: [String]
-    public var idleNames: [String]
+    /// 상태별 세션(정렬된 순서). 개수 필드와 별개로 보관하며, 모니터는 항상 `sessions.count == 개수`로 채운다.
+    public var activeSessions: [SessionRef]
+    public var waitingSessions: [SessionRef]
+    public var idleSessions: [SessionRef]
+
+    public var activeNames: [String] { activeSessions.map(\.name) }
+    public var waitingNames: [String] { waitingSessions.map(\.name) }
+    public var idleNames: [String] { idleSessions.map(\.name) }
+
+    /// 구조화 정보를 직접 넘기는 초기화. (이름만 넘기는 초기화와 모호해지지 않도록 세션 배열은 필수.)
     public init(
         active: Int, waiting: Int, idle: Int,
-        activeNames: [String] = [], waitingNames: [String] = [], idleNames: [String] = []
+        activeSessions: [SessionRef], waitingSessions: [SessionRef], idleSessions: [SessionRef]
     ) {
         self.active = active
         self.waiting = waiting
         self.idle = idle
-        self.activeNames = activeNames
-        self.waitingNames = waitingNames
-        self.idleNames = idleNames
+        self.activeSessions = activeSessions
+        self.waitingSessions = waitingSessions
+        self.idleSessions = idleSessions
+    }
+
+    /// 이름만 넘기는 호환 초기화: 각 이름은 pid 없는 `SessionRef` 가 된다.
+    public init(
+        active: Int, waiting: Int, idle: Int,
+        activeNames: [String] = [], waitingNames: [String] = [], idleNames: [String] = []
+    ) {
+        self.init(
+            active: active, waiting: waiting, idle: idle,
+            activeSessions: activeNames.map { SessionRef(name: $0) },
+            waitingSessions: waitingNames.map { SessionRef(name: $0) },
+            idleSessions: idleNames.map { SessionRef(name: $0) })
     }
 }
 

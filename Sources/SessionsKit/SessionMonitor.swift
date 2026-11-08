@@ -132,10 +132,10 @@ public final class SessionMonitor: SessionMonitoring, @unchecked Sendable {
     }
 
     private func computeCounts() -> SessionCounts {
-        var active: [(name: String, pid: Int)] = []
-        var waiting: [(name: String, pid: Int)] = []
-        var idle: [(name: String, pid: Int)] = []
-        var sessionIds = Set<String>()
+        var active: [SessionRef] = []
+        var waiting: [SessionRef] = []
+        var idle: [SessionRef] = []
+        var parents: [String: (pid: Int, entrypoint: String?)] = [:]
         let files = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
         for file in files {
             guard let record = readRecord(named: file) else { continue }
@@ -145,30 +145,33 @@ public final class SessionMonitor: SessionMonitoring, @unchecked Sendable {
 
             let (kind, known) = mapping.classify(record.status)
             if !known { logUnknown(record.status) }
-            if let sid = record.sessionId { sessionIds.insert(sid) }
-            let entry = (name: Self.displayName(name: record.name, cwd: record.cwd), pid: pid)
+            if let sid = record.sessionId, parents[sid].map({ pid < $0.pid }) ?? true { parents[sid] = (pid, record.entrypoint) }
+            let ref = SessionRef(
+                name: Self.displayName(name: record.name, cwd: record.cwd),
+                pid: Int32(truncatingIfNeeded: pid), entrypoint: record.entrypoint)
             switch kind {
-            case .active: active.append(entry)
-            case .waiting: waiting.append(entry)
-            case .idle: idle.append(entry)
+            case .active: active.append(ref)
+            case .waiting: waiting.append(ref)
+            case .idle: idle.append(ref)
             }
         }
-        func sortedNames(_ entries: [(name: String, pid: Int)]) -> [String] {
-            entries.sorted {
+        func sorted(_ refs: [SessionRef]) -> [SessionRef] {
+            refs.sorted {
                 let order = $0.name.compare($1.name, options: [.caseInsensitive, .numeric])
-                return order == .orderedSame ? $0.pid < $1.pid : order == .orderedAscending
-            }.map(\.name)
+                return order == .orderedSame ? ($0.pid ?? 0) < ($1.pid ?? 0) : order == .orderedAscending
+            }
         }
-        let subagentNames = runningSubagentNames(sessionIds: sessionIds, now: Date())
+        let subagents = runningSubagents(parents: parents, now: Date())
+        let activeAll = sorted(active) + subagents
         return SessionCounts(
-            active: active.count + subagentNames.count, waiting: waiting.count, idle: idle.count,
-            activeNames: sortedNames(active) + subagentNames, waitingNames: sortedNames(waiting), idleNames: sortedNames(idle))
+            active: activeAll.count, waiting: waiting.count, idle: idle.count,
+            activeSessions: activeAll, waitingSessions: sorted(waiting), idleSessions: sorted(idle))
     }
 
-    /// 살아있는 세션들의 실행 중 서브에이전트를 `↳ 설명` 이름순으로 반환한다.
+    /// 살아있는 세션들의 실행 중 서브에이전트를 `↳ 설명` 이름순으로 반환한다(부모 pid·entrypoint 를 붙인다).
     /// 살아있는 sessionId 마다 `projects/*/<sessionId>/subagents` 만 연다. jsonl 은 읽지 않고 stat 만 한다.
-    private func runningSubagentNames(sessionIds: Set<String>, now: Date) -> [String] {
-        guard !sessionIds.isEmpty else { return [] }
+    private func runningSubagents(parents: [String: (pid: Int, entrypoint: String?)], now: Date) -> [SessionRef] {
+        guard !parents.isEmpty else { return [] }
         let fm = FileManager.default
         let projectDirs = (try? fm.contentsOfDirectory(
             at: projectsDirectory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
@@ -178,11 +181,11 @@ public final class SessionMonitor: SessionMonitoring, @unchecked Sendable {
             (try? fm.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
         }
 
-        var found: [(name: String, key: String)] = []
+        var found: [(ref: SessionRef, key: String)] = []
         var seen = Set<String>()
-        for sid in sessionIds.sorted() {
+        for sid in parents.keys.sorted() {
             // sessionId 는 파일 내용이므로 경로 요소로 안전한 값만 허용한다.
-            guard !sid.isEmpty, sid != ".", sid != "..", !sid.contains("/"), !sid.contains("\0") else { continue }
+            guard !sid.isEmpty, sid != ".", sid != "..", !sid.contains("/"), !sid.contains("\0"), let parent = parents[sid] else { continue }
             for project in projectDirs {
                 let dir = project.appendingPathComponent(sid, isDirectory: true).appendingPathComponent("subagents", isDirectory: true)
                 guard let entries = try? fm.contentsOfDirectory(atPath: dir.path) else { continue }
@@ -198,14 +201,18 @@ public final class SessionMonitor: SessionMonitoring, @unchecked Sendable {
                           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                           (object["finished"] as? Bool) != true
                     else { continue }
-                    found.append((Self.subagentName(description: object["description"] as? String), meta.path))
+                    let ref = SessionRef(
+                        name: Self.subagentName(description: object["description"] as? String),
+                        pid: nil, entrypoint: parent.entrypoint, isSubagent: true,
+                        parentPid: Int32(truncatingIfNeeded: parent.pid))
+                    found.append((ref, meta.path))
                 }
             }
         }
         return found.sorted {
-            let order = $0.name.compare($1.name, options: [.caseInsensitive, .numeric])
+            let order = $0.ref.name.compare($1.ref.name, options: [.caseInsensitive, .numeric])
             return order == .orderedSame ? $0.key < $1.key : order == .orderedAscending
-        }.map(\.name)
+        }.map(\.ref)
     }
 
     /// `↳ <description>`; description 이 비면 `↳ 서브에이전트`.
@@ -225,7 +232,7 @@ public final class SessionMonitor: SessionMonitoring, @unchecked Sendable {
     }
 
     /// `<pid>.json`만 허용(`<pid>.<hash>.key` 등 무시). 읽기/파싱 실패(부분 쓰기 포함)는 nil.
-    private func readRecord(named name: String) -> (pid: Int, status: String?, procStart: String?, name: String?, cwd: String?, sessionId: String?)? {
+    private func readRecord(named name: String) -> (pid: Int, status: String?, procStart: String?, name: String?, cwd: String?, sessionId: String?, entrypoint: String?)? {
         guard name.hasSuffix(".json"),
               let pid = Int(name.dropLast(".json".count)), pid > 0, String(pid) == name.dropLast(".json".count)
         else { return nil }
@@ -234,7 +241,8 @@ public final class SessionMonitor: SessionMonitoring, @unchecked Sendable {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         return (pid, object["status"] as? String, object["procStart"] as? String,
-                object["name"] as? String, object["cwd"] as? String, object["sessionId"] as? String)
+                object["name"] as? String, object["cwd"] as? String, object["sessionId"] as? String,
+                object["entrypoint"] as? String)
     }
 
     private func logUnknown(_ status: String?) {

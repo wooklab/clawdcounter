@@ -11,6 +11,8 @@ final class MenuBuilderTests: XCTestCase {
         func logout() { calls.append("logout") }
         func quit() { calls.append("quit") }
         func openSettings() { calls.append("settings") }
+        var focused: [SessionRef] = []
+        func focusSession(_ ref: SessionRef) { focused.append(ref) }
     }
 
     let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -58,7 +60,7 @@ final class MenuBuilderTests: XCTestCase {
             "● 응답대기 1", "    · 이름C",
             "○ 비활성 4", "    · 이름D", "    · 이름E", "    · 이름F", "    · 이름G",
             "---",
-            "로그아웃", "설정…",
+            "Claude 로그아웃", "설정…",
             "---",
             "종료",
         ])
@@ -115,8 +117,8 @@ final class MenuBuilderTests: XCTestCase {
     func testAuthItemTitles() {
         func authTitle(_ a: AuthState) -> String { build(full, auth: a).items.first { $0.title.contains("로그") && $0.action != nil }!.title }
         XCTAssertEqual(authTitle(.signedOut), "Claude 로그인")
-        XCTAssertEqual(authTitle(.signedIn), "로그아웃")
-        XCTAssertEqual(authTitle(.expired), "다시 로그인")
+        XCTAssertEqual(authTitle(.signedIn), "Claude 로그아웃")
+        XCTAssertEqual(authTitle(.expired), "Claude 다시 로그인")
         let signingIn = build(full, auth: .signingIn).items.first { $0.title == "로그인 중…" && $0.action != nil }
         XCTAssertEqual(signingIn?.isEnabled, false)
     }
@@ -146,36 +148,86 @@ final class MenuBuilderTests: XCTestCase {
 
     func names(_ prefix: String, _ n: Int) -> [String] { (1...max(n, 1)).prefix(n).map { "\(prefix)\($0)" } }
 
+    func isHeader(_ item: NSMenuItem) -> Bool { item.title.hasPrefix("●") || item.title.hasPrefix("○") }
+
     func testSessionSectionStructureAndAccessibility() {
         let menu = build(full)
         let items = sessionItems(menu)
         XCTAssertEqual(items.map(\.title), sessionTitles)
-        XCTAssertTrue(items.allSatisfy { !$0.isEnabled && $0.view == nil && $0.submenu == nil })
+        // 헤더: 비클릭 커스텀 뷰 / 세션명: 클릭 가능한 일반 항목
+        for item in items {
+            XCTAssertNil(item.submenu)
+            if isHeader(item) {
+                XCTAssertFalse(item.isEnabled)
+                XCTAssertTrue(item.view is SessionRowView, item.title)
+            } else {
+                XCTAssertTrue(item.isEnabled, item.title)
+                XCTAssertNil(item.view, item.title)
+                XCTAssertNil(item.attributedTitle, item.title) // 회색 없이 기본 글자색
+                XCTAssertNotNil(item.action)
+            }
+        }
         XCTAssertEqual(items.map { $0.accessibilityLabel() }, [
-            "활성 세션 2개", "세션 이름A", "세션 이름B",
-            "응답대기 세션 1개", "세션 이름C",
-            "비활성 세션 4개", "세션 이름D", "세션 이름E", "세션 이름F", "세션 이름G",
+            "활성 세션 2개", "세션 이름A 열기", "세션 이름B 열기",
+            "응답대기 세션 1개", "세션 이름C 열기",
+            "비활성 세션 4개", "세션 이름D 열기", "세션 이름E 열기", "세션 이름F 열기", "세션 이름G 열기",
         ])
         // 세션 구획은 위·아래 구분선 사이에 있다
         let first = menu.items.firstIndex(of: items[0])!
         let last = menu.items.firstIndex(of: items.last!)!
         XCTAssertTrue(menu.items[first - 1].isSeparatorItem)
         XCTAssertTrue(menu.items[last + 1].isSeparatorItem)
-        XCTAssertEqual(menu.items.filter { $0.title.hasPrefix("●") || $0.title.hasPrefix("○") }.count, 3) // 헤더 3개
+        XCTAssertEqual(menu.items.filter(isHeader).count, 3) // 헤더 3개
     }
 
-    func testSessionHeaderDotColorsAndNameColors() {
+    func testSessionHeaderViewsAreLabelColoredWithDotColor() {
         let items = sessionItems(build(full))
-        func color(_ item: NSMenuItem, at i: Int) -> NSColor? {
-            item.attributedTitle?.attribute(.foregroundColor, at: i, effectiveRange: nil) as? NSColor
+        func color(_ view: SessionRowView, at i: Int) -> NSColor? {
+            view.attributedText.attribute(.foregroundColor, at: i, effectiveRange: nil) as? NSColor
         }
-        let h = items.filter { $0.title.hasPrefix("●") || $0.title.hasPrefix("○") }
-        XCTAssertEqual(h.map { color($0, at: 0) }, [.systemGreen, .systemYellow, .labelColor])
-        XCTAssertEqual(h.map { color($0, at: 3) }, [.labelColor, .labelColor, .labelColor]) // 라벨/개수
-        for item in items where item.title.hasPrefix("    ") {
-            XCTAssertEqual(color(item, at: 6), .secondaryLabelColor, item.title)
+        let views = items.filter(isHeader).map { $0.view as! SessionRowView }
+        XCTAssertEqual(views.map { color($0, at: 0) }, [.systemGreen, .systemYellow, .labelColor]) // 점
+        XCTAssertEqual(views.map { color($0, at: 3) }, [.labelColor, .labelColor, .labelColor]) // 라벨/개수
+        for v in views { XCTAssertEqual(v.attributedText.string, v.text) }
+        XCTAssertEqual(views.map { $0.accessibilityLabel() }, ["활성 세션 2개", "응답대기 세션 1개", "비활성 세션 4개"])
+    }
+
+    func testSessionRowViewDrawsInBothAppearances() {
+        let items = sessionItems(build(full))
+        for name in [NSAppearance.Name.aqua, .darkAqua] {
+            for item in items.filter(isHeader) {
+                let row = item.view as! SessionRowView
+                row.appearance = NSAppearance(named: name)
+                let rep = row.bitmapImageRepForCachingDisplay(in: row.bounds)!
+                row.cacheDisplay(in: row.bounds, to: rep)
+                XCTAssertGreaterThan(rep.pixelsWide, 0)
+            }
         }
-        for item in items { XCTAssertEqual(item.attributedTitle?.string, item.title) } // 평문 title 과 동일
+    }
+
+    func click(_ item: NSMenuItem) { _ = item.target!.perform(item.action!) }
+
+    func testSessionNameClickCallsFocusSessionWithRef() {
+        let spy = Spy()
+        let parent = SessionRef(name: "부모", pid: 100, entrypoint: "cli")
+        let sub = SessionRef(name: "↳ 작업", pid: nil, entrypoint: "claude-desktop", isSubagent: true, parentPid: 200)
+        let desktop = SessionRef(name: "데스크탑", pid: 200, entrypoint: "claude-desktop")
+        let s = SessionCounts(
+            active: 3, waiting: 0, idle: 0,
+            activeSessions: [parent, desktop, sub], waitingSessions: [], idleSessions: [])
+        // 빌더를 버려도(actions 는 weak, spy 는 지역변수가 유지) 클릭이 전달되어야 한다.
+        let menu = MenuBuilder(actions: spy).buildMenu(usage: nil, sessions: s, auth: .signedIn, now: now)
+        let names = sessionItems(menu).filter { !isHeader($0) }
+        XCTAssertEqual(names.map(\.title), ["    · 부모", "    · 데스크탑", "    · ↳ 작업"])
+        names.forEach(click)
+        XCTAssertEqual(spy.focused, [parent, desktop, sub])
+        XCTAssertEqual(spy.focused.map(\.focusPid), [100, 200, 200]) // 서브에이전트는 부모 pid
+    }
+
+    func testSessionNameClickWithoutActionsDoesNothing() {
+        let s = SessionCounts(active: 1, waiting: 0, idle: 0, activeNames: ["a"])
+        let menu = MenuBuilder(actions: nil).buildMenu(usage: nil, sessions: s, auth: .signedIn, now: now)
+        click(sessionItems(menu).first { $0.title == "    · a" }!) // 크래시 없음
     }
 
     func testSessionNamesOverEightShowsMoreLine() {
@@ -185,6 +237,11 @@ final class MenuBuilderTests: XCTestCase {
             + ["● 응답대기 0", "○ 비활성 8"] + (1...8).map { "    · i\($0)" }) // 정확히 8개면 `외` 줄 없음
         let more = sessionItems(buildSessions(s)).first { $0.title == "    외 4개" }
         XCTAssertEqual(more?.accessibilityLabel(), "그 밖에 활성 세션 4개")
+        // `외 N개` 는 비클릭이지만 선명한(labelColor) 커스텀 뷰 행
+        XCTAssertEqual(more?.isEnabled, false)
+        let moreView = more?.view as? SessionRowView
+        XCTAssertNotNil(moreView)
+        XCTAssertEqual(moreView?.attributedText.attribute(.foregroundColor, at: 5, effectiveRange: nil) as? NSColor, .labelColor)
         let nine = sessionTitles(buildSessions(SessionCounts(active: 0, waiting: 9, idle: 0, waitingNames: names("w", 9))))
         XCTAssertEqual(nine.filter { $0.hasPrefix("    외") }, ["    외 1개"])
     }
@@ -228,7 +285,7 @@ final class MenuBuilderTests: XCTestCase {
         // 클릭 전달
         func fire(_ item: NSMenuItem) { _ = item.target!.perform(item.action!, with: item) }
         fire(item)
-        fire(menu.items.first { $0.title == "로그아웃" }!)
+        fire(menu.items.first { $0.title == "Claude 로그아웃" }!)
         fire(menu.items.last!)
         XCTAssertEqual(spy.calls, ["settings", "logout", "quit"])
     }
@@ -324,7 +381,7 @@ final class MenuBuilderTests: XCTestCase {
 
     func testSignedOutAndExpiredHideLimitRows() {
         for auth in [AuthState.signedOut, .expired, .signingIn] {
-            XCTAssertTrue(build(full, auth: auth).items.allSatisfy { $0.view == nil }, "\(auth)")
+            XCTAssertTrue(build(full, auth: auth).items.allSatisfy { !($0.view is LimitRowView) }, "\(auth)")
         }
     }
 

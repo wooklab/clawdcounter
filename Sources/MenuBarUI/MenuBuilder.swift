@@ -8,11 +8,15 @@ public protocol MenuActions: AnyObject {
     func logout()
     func quit()
     func openSettings()
+    /// 세션명 항목 클릭: 그 세션이 도는 앱을 앞으로 가져온다.
+    func focusSession(_ ref: SessionRef)
 }
 
 extension MenuActions {
     /// 설정 창이 없는 소비자(RenderPreview 등)용 기본 구현.
     public func openSettings() {}
+    /// 세션 활성화가 없는 소비자(RenderPreview 등)용 기본 구현.
+    public func focusSession(_ ref: SessionRef) {}
 }
 
 /// 앱이 보관하는 설정 값. 메뉴 구성에는 쓰이지 않는다(설정 창이 직접 다룸).
@@ -112,7 +116,7 @@ public final class MenuBuilder {
     }
 
     private func sessionSection(_ s: SessionCounts) -> [NSMenuItem] {
-        Self.sessionItems(s)
+        Self.sessionItems(s, actions: actions)
     }
 
     private func settingsSection(auth: AuthState, target: MenuTarget) -> [NSMenuItem] {
@@ -121,13 +125,13 @@ public final class MenuBuilder {
         case .signedOut:
             items.append(actionItem("Claude 로그인", target: target, action: #selector(MenuTarget.login)))
         case .expired:
-            items.append(actionItem("다시 로그인", target: target, action: #selector(MenuTarget.login)))
+            items.append(actionItem("Claude 다시 로그인", target: target, action: #selector(MenuTarget.login)))
         case .signingIn:
             let item = actionItem("로그인 중…", target: target, action: #selector(MenuTarget.login))
             item.isEnabled = false
             items.append(item)
         case .signedIn:
-            items.append(actionItem("로그아웃", target: target, action: #selector(MenuTarget.logout)))
+            items.append(actionItem("Claude 로그아웃", target: target, action: #selector(MenuTarget.logout)))
         }
         items.append(actionItem("설정…", target: target, action: #selector(MenuTarget.openSettings)))
         return items
@@ -170,29 +174,31 @@ public final class MenuBuilder {
     static let nameIndent = "    "
 
     /// 세션 구획: 상태마다 헤더 줄(`● 활성 2`) + 세션명 줄(`    · 이름`, 최대 8개, 초과 시 `    외 N개`).
-    /// 세 헤더는 개수가 0 이어도 항상 표시한다. 항목은 모두 비활성 평문 항목(title 은 평문, 색은 attributedTitle).
-    static func sessionItems(_ s: SessionCounts) -> [NSMenuItem] {
-        let groups: [(dot: String, color: NSColor, label: String, count: Int, names: [String])] = [
-            ("●", .systemGreen, "활성", s.active, s.activeNames),
-            ("●", .systemYellow, "응답대기", s.waiting, s.waitingNames),
-            ("○", .labelColor, "비활성", s.idle, s.idleNames),
+    /// 세 헤더는 개수가 0 이어도 항상 표시한다.
+    /// 헤더·`외 N개` 는 비클릭 커스텀 뷰 행(labelColor), 세션명은 클릭 가능한 일반 항목(`focusSession` 호출).
+    /// 모든 항목의 `title` 은 평문이다.
+    static func sessionItems(_ s: SessionCounts, actions: MenuActions? = nil) -> [NSMenuItem] {
+        let groups: [(dot: String, color: NSColor, label: String, count: Int, sessions: [SessionRef])] = [
+            ("●", .systemGreen, "활성", s.active, s.activeSessions),
+            ("●", .systemYellow, "응답대기", s.waiting, s.waitingSessions),
+            ("○", .labelColor, "비활성", s.idle, s.idleSessions),
         ]
         var items: [NSMenuItem] = []
         for g in groups {
-            let header = textItem("\(g.dot) \(g.label) \(g.count)", color: .labelColor, dot: (g.dot, g.color))
-            header.setAccessibilityLabel("\(g.label) 세션 \(g.count)개")
-            items.append(header)
-            for name in g.names.prefix(maxNamesPerState) {
-                let shown = displayName(name)
-                let item = textItem("\(nameIndent)· \(shown)", color: .secondaryLabelColor)
-                item.setAccessibilityLabel("세션 \(shown)")
+            items.append(textRow("\(g.dot) \(g.label) \(g.count)", dotColor: g.color, accessibility: "\(g.label) 세션 \(g.count)개"))
+            for ref in g.sessions.prefix(maxNamesPerState) {
+                let shown = displayName(ref.name)
+                let target = SessionTarget(ref: ref, actions: actions)
+                let item = NSMenuItem(title: "\(nameIndent)· \(shown)", action: #selector(SessionTarget.focus), keyEquivalent: "")
+                item.target = target
+                item.representedObject = target // target은 weak이므로 강한 참조 유지
+                item.isEnabled = true
+                item.setAccessibilityLabel("세션 \(shown) 열기")
                 items.append(item)
             }
-            let extra = g.names.count - maxNamesPerState
+            let extra = g.sessions.count - maxNamesPerState
             if extra > 0 {
-                let item = textItem("\(nameIndent)외 \(extra)개", color: .secondaryLabelColor)
-                item.setAccessibilityLabel("그 밖에 \(g.label) 세션 \(extra)개")
-                items.append(item)
+                items.append(textRow("\(nameIndent)외 \(extra)개", dotColor: nil, accessibility: "그 밖에 \(g.label) 세션 \(extra)개"))
             }
         }
         return items
@@ -205,16 +211,12 @@ public final class MenuBuilder {
         return String(flat.prefix(maxNameLength - 1)) + "…"
     }
 
-    /// 비활성 평문 항목. `title` 은 평문이고 `attributedTitle` 은 같은 문자열에 색만 입힌다(점 색 `dot` 은 선두 글자).
-    private static func textItem(_ title: String, color: NSColor, dot: (symbol: String, color: NSColor)? = nil) -> NSMenuItem {
+    /// 비클릭 커스텀 뷰 행. title/접근성에는 평문을 넣어 MenuDump·테스트·VoiceOver 가 읽는다.
+    private static func textRow(_ title: String, dotColor: NSColor?, accessibility: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
-        let font = NSFont.menuFont(ofSize: 0)
-        let text = NSMutableAttributedString(string: title, attributes: [.foregroundColor: color, .font: font])
-        if let dot, title.hasPrefix(dot.symbol) {
-            text.addAttribute(.foregroundColor, value: dot.color, range: NSRange(location: 0, length: (dot.symbol as NSString).length))
-        }
-        item.attributedTitle = text
+        item.view = SessionRowView(text: title, dotColor: dotColor, accessibilityText: accessibility)
+        item.setAccessibilityLabel(accessibility)
         return item
     }
 
@@ -237,6 +239,19 @@ final class MenuTarget: NSObject {
     @objc func logout() { actions?.logout() }
     @objc func quit() { actions?.quit() }
     @objc func openSettings() { actions?.openSettings() }
+}
+
+/// 세션명 항목 클릭 대상. 항목의 `representedObject` 로 강하게 유지된다.
+@MainActor
+final class SessionTarget: NSObject {
+    weak var actions: MenuActions?
+    let ref: SessionRef
+    init(ref: SessionRef, actions: MenuActions?) {
+        self.ref = ref
+        self.actions = actions
+    }
+
+    @objc func focus() { actions?.focusSession(ref) }
 }
 
 /// 메뉴 구조 텍스트 덤프(디버그/테스트용). 구분선은 "---", 서브메뉴는 2칸 들여쓰기, 체크는 "[x] ".

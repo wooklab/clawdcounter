@@ -154,9 +154,7 @@ for mode in Mode.allCases {
 }
 
 /// 메뉴 항목 뷰는 NSMenuItemViewer 안에서 원점이 고정되므로, 행마다 자기 bounds 를 bitmapImageRep 로 캐시한 뒤 배경 위에 합성한다.
-@MainActor func limitsPNG(_ usage: UsageSnapshot, mode: Mode) -> Data? {
-    let menu = MenuBuilder(actions: nil).buildMenu(usage: usage, sessions: counts, auth: .signedIn, now: now)
-    let views = menu.items.prefix { !$0.isSeparatorItem }.compactMap(\.view)
+@MainActor func stackPNG(_ views: [NSView], mode: Mode) -> Data? {
     guard !views.isEmpty else { return nil }
     let pad: CGFloat = 6
     let width = max(views.map { $0.frame.width }.max() ?? 0, 260) // 실제 메뉴는 다른 항목 때문에 더 넓다
@@ -193,6 +191,11 @@ for mode in Mode.allCases {
     return out.representation(using: .png, properties: [:])
 }
 
+@MainActor func limitsPNG(_ usage: UsageSnapshot, mode: Mode) -> Data? {
+    let menu = MenuBuilder(actions: nil).buildMenu(usage: usage, sessions: counts, auth: .signedIn, now: now)
+    return stackPNG(menu.items.prefix { !$0.isSeparatorItem }.compactMap(\.view), mode: mode)
+}
+
 let limitCases: [(String, UsageSnapshot)] = [
     ("five-hour-42", UsageSnapshot(
         fiveHour: win(42, in: 2 * h + 13 * 60), weekly: win(63, in: 3 * 86400 + 5 * h), fetchedAt: now)),
@@ -213,34 +216,27 @@ for mode in Mode.allCases {
     }
 }
 
-// 세션 구획: 헤더+세션명 평문 항목(attributedTitle)을 같은 방식으로 그려 PNG 저장
+// 세션 구획: 헤더·`외 N개` 는 커스텀 뷰 행, 세션명은 일반(클릭 가능) 항목이라 기본 글자색(labelColor)으로 그린다.
+// 실제 NSMenu 의 항목 글자 위치(14pt)를 가정한 시뮬레이션이다.
 // (build/preview/menu-sessions-<case>-<light|dark>.png)
-@MainActor func sessionsPNG(_ s: SessionCounts, mode: Mode) -> Data {
+@MainActor final class PreviewTextRow: NSView {
+    let text: NSAttributedString
+    init(title: String) {
+        text = NSAttributedString(string: title, attributes: [.foregroundColor: NSColor.labelColor, .font: NSFont.menuFont(ofSize: 0)])
+        super.init(frame: NSRect(x: 0, y: 0, width: 14 + ceil(text.size().width) + 14, height: 22))
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+    override var isFlipped: Bool { true }
+    override func draw(_ dirtyRect: NSRect) {
+        text.draw(at: NSPoint(x: 14, y: ((bounds.height - text.size().height) / 2).rounded()))
+    }
+}
+
+@MainActor func sessionsPNG(_ s: SessionCounts, mode: Mode) -> Data? {
     let menu = MenuBuilder(actions: nil).buildMenu(usage: nil, sessions: s, auth: .signedOut, now: now)
     // 로그인 안내와 설정 구획 사이: 첫 구분선 다음 ~ 둘째 구분선 앞
     let section = menu.items.drop { !$0.isSeparatorItem }.dropFirst().prefix { !$0.isSeparatorItem }
-    let rowH: CGFloat = 22, inset: CGFloat = 14
-    let texts = section.compactMap(\.attributedTitle)
-    let width = max(ceil((texts.map { $0.size().width }.max() ?? 0)) + inset * 2, 260)
-    let height = rowH * CGFloat(texts.count) + 12
-    let rep = NSBitmapImageRep(
-        bitmapDataPlanes: nil, pixelsWide: Int(width) * scale, pixelsHigh: Int(height) * scale,
-        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
-    rep.size = NSSize(width: width, height: height)
-    NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-    mode.appearance.performAsCurrentDrawingAppearance {
-        mode.background.setFill()
-        NSRect(x: 0, y: 0, width: width, height: height).fill()
-        for (i, t) in texts.enumerated() {
-            let size = t.size()
-            let y = height - 6 - rowH * CGFloat(i + 1) + ((rowH - size.height) / 2).rounded()
-            t.draw(at: NSPoint(x: inset, y: y))
-        }
-    }
-    NSGraphicsContext.restoreGraphicsState()
-    return rep.representation(using: .png, properties: [:])!
+    return stackPNG(section.map { $0.view ?? PreviewTextRow(title: $0.title) }, mode: mode)
 }
 
 func sessionNames(_ prefix: String, _ n: Int) -> [String] { (1...max(n, 1)).prefix(n).map { "\(prefix)\($0)" } }
@@ -266,7 +262,7 @@ let sessionCases: [(String, SessionCounts)] = [
 for mode in Mode.allCases {
     for (name, s) in sessionCases {
         let url = outDir.appendingPathComponent("menu-sessions-\(name)-\(mode.rawValue).png")
-        try sessionsPNG(s, mode: mode).write(to: url)
+        try sessionsPNG(s, mode: mode)?.write(to: url)
         written.append(url.path)
     }
 }

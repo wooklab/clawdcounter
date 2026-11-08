@@ -180,4 +180,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAc
     func openSettings() {
         settingsWindow.present()
     }
+
+    func focusSession(_ ref: SessionRef) {
+        SessionActivator.activate(ref)
+    }
 }
