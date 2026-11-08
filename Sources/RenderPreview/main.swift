@@ -251,6 +251,10 @@ let sessionCases: [(String, SessionCounts)] = [
         active: 2, waiting: 1, idle: 4,
         activeNames: ["clawdcounter 드롭다운", "맥북 메뉴바 표시 제거"], waitingNames: ["상태바 앱 이름 추천"],
         idleNames: ["btw: sfltool 권한", "docs", "refactor-auth", "이름 없음"])),
+    ("subagents", SessionCounts(
+        active: 5, waiting: 1, idle: 2,
+        activeNames: ["clawdcounter 드롭다운", "맥북 메뉴바 표시 제거", "↳ Session monitor module", "↳ 서브에이전트", "↳ 테스트 작성 및 검증"],
+        waitingNames: ["상태바 앱 이름 추천"], idleNames: ["docs", "refactor-auth"])),
     ("over8", SessionCounts(
         active: 12, waiting: 1, idle: 9,
         activeNames: sessionNames("작업 ", 12), waitingNames: ["대기 세션"], idleNames: sessionNames("idle-", 9))),

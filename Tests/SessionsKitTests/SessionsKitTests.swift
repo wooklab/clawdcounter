@@ -440,3 +440,267 @@ final class FSEventsWatcherTests: XCTestCase {
         XCTAssertEqual(counter.value, before, "no callback after deinit")
     }
 }
+
+// MARK: - 서브에이전트
+
+final class SubagentCountingTests: XCTestCase {
+    private func monitor(_ dir: URL, _ projects: URL, rescan: TimeInterval = 60) -> SessionMonitor {
+        SessionMonitor(directory: dir, projectsDirectory: projects, statusMapping: .default, debounce: 0.1, rescanInterval: rescan)
+    }
+
+    private func collect(_ m: SessionMonitor) -> (Emissions, Task<Void, Never>) {
+        let e = Emissions()
+        let stream = m.countsStream()
+        let task = Task { for await c in stream { e.append(c) } }
+        return (e, task)
+    }
+
+    /// `<projects>/<project>/s-<pid>/subagents/agent-<id>.{meta.json,jsonl}`. `age` 초 전으로 mtime 설정.
+    @discardableResult
+    private func writeAgent(
+        _ projects: URL, parentPid: Int, id: String, description: String? = "작업", finished: Bool? = nil,
+        depth: Int = 1, age: TimeInterval = 0, project: String = "-proj", withJsonl: Bool = true
+    ) throws -> URL {
+        let dir = projects.appendingPathComponent(project).appendingPathComponent("s-\(parentPid)").appendingPathComponent("subagents")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var obj: [String: Any] = ["agentType": "general-purpose", "spawnDepth": depth, "requestShape": "background"]
+        if let description { obj["description"] = description }
+        if let finished { obj["finished"] = finished }
+        let meta = dir.appendingPathComponent("agent-\(id).meta.json")
+        try JSONSerialization.data(withJSONObject: obj).write(to: meta)
+        var files = [meta]
+        if withJsonl {
+            let jsonl = dir.appendingPathComponent("agent-\(id).jsonl")
+            try Data("{}\n".utf8).write(to: jsonl)
+            files.append(jsonl)
+        }
+        let date = Date().addingTimeInterval(-age)
+        for f in files { try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: f.path) }
+        return meta
+    }
+
+    func testRunningSubagentsAddedToActiveWithNames() async throws {
+        let (dir, projects) = (try makeTempDir(), try makeTempDir())
+        defer { [dir, projects].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let p = try spawnSleeper(); defer { p.terminate() }
+        let pid = Int(p.processIdentifier)
+        try write(dir, pid: pid, status: "idle", name: "부모")
+        try writeAgent(projects, parentPid: pid, id: "b", description: "Zeta 작업")
+        try writeAgent(projects, parentPid: pid, id: "a", description: "alpha 작업")
+        let m = monitor(dir, projects)
+        let (e, task) = collect(m)
+        m.start(); defer { m.stop(); task.cancel() }
+        let ok = await waitUntil { e.latest?.numbers == [2, 0, 1] }
+        XCTAssertTrue(ok, "emitted: \(e.all)")
+        XCTAssertEqual(e.latest?.activeNames, ["↳ alpha 작업", "↳ Zeta 작업"])
+        XCTAssertEqual(e.latest?.idleNames, ["부모"])
+    }
+
+    func testParentCountedSeparatelyFromItsSubagents() async throws {
+        let (dir, projects) = (try makeTempDir(), try makeTempDir())
+        defer { [dir, projects].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let p = try spawnSleeper(); defer { p.terminate() }
+        let pid = Int(p.processIdentifier)
+        try write(dir, pid: pid, status: "busy", name: "부모")
+        try writeAgent(projects, parentPid: pid, id: "a", description: "하나")
+        try writeAgent(projects, parentPid: pid, id: "b", description: "둘")
+        let m = monitor(dir, projects)
+        let (e, task) = collect(m)
+        m.start(); defer { m.stop(); task.cancel() }
+        let ok = await waitUntil { e.latest?.numbers == [3, 0, 0] }
+        XCTAssertTrue(ok, "emitted: \(e.all)")
+        XCTAssertEqual(e.latest?.activeNames, ["부모", "↳ 둘", "↳ 하나"])
+    }
+
+    func testFinishedSubagentExcluded() async throws {
+        let (dir, projects) = (try makeTempDir(), try makeTempDir())
+        defer { [dir, projects].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let p = try spawnSleeper(); defer { p.terminate() }
+        let pid = Int(p.processIdentifier)
+        try write(dir, pid: pid, status: "idle")
+        try writeAgent(projects, parentPid: pid, id: "run", description: "실행중")
+        try writeAgent(projects, parentPid: pid, id: "done", description: "끝남", finished: true)
+        try writeAgent(projects, parentPid: pid, id: "false", description: "false 명시", finished: false)
+        let m = monitor(dir, projects)
+        let (e, task) = collect(m)
+        m.start(); defer { m.stop(); task.cancel() }
+        let ok = await waitUntil { e.latest?.numbers == [2, 0, 1] }
+        XCTAssertTrue(ok, "emitted: \(e.all)")
+        XCTAssertEqual(e.latest?.activeNames, ["↳ false 명시", "↳ 실행중"])
+    }
+
+    func testStaleSubagentExcludedByMtime() async throws {
+        let (dir, projects) = (try makeTempDir(), try makeTempDir())
+        defer { [dir, projects].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let p = try spawnSleeper(); defer { p.terminate() }
+        let pid = Int(p.processIdentifier)
+        let stale = SessionMonitor.subagentStaleThreshold
+        try write(dir, pid: pid, status: "idle")
+        try writeAgent(projects, parentPid: pid, id: "old", description: "오래됨", age: stale + 60)
+        try writeAgent(projects, parentPid: pid, id: "oldmeta", description: "meta만 오래됨", age: stale + 60, withJsonl: false)
+        try writeAgent(projects, parentPid: pid, id: "fresh", description: "최근", age: stale - 60)
+        let m = monitor(dir, projects)
+        let (e, task) = collect(m)
+        m.start(); defer { m.stop(); task.cancel() }
+        let ok = await waitUntil { e.latest?.numbers == [1, 0, 1] }
+        XCTAssertTrue(ok, "emitted: \(e.all)")
+        XCTAssertEqual(e.latest?.activeNames, ["↳ 최근"])
+    }
+
+    /// meta 는 오래됐어도 jsonl 이 최근에 갱신됐다면 실행 중이다.
+    func testRecentJsonlKeepsOldMetaRunning() async throws {
+        let (dir, projects) = (try makeTempDir(), try makeTempDir())
+        defer { [dir, projects].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let p = try spawnSleeper(); defer { p.terminate() }
+        let pid = Int(p.processIdentifier)
+        try write(dir, pid: pid, status: "idle")
+        let meta = try writeAgent(projects, parentPid: pid, id: "x", description: "장기 작업")
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-SessionMonitor.subagentStaleThreshold - 600)], ofItemAtPath: meta.path)
+        let m = monitor(dir, projects)
+        let (e, task) = collect(m)
+        m.start(); defer { m.stop(); task.cancel() }
+        let ok = await waitUntil { e.latest?.numbers == [1, 0, 1] }
+        XCTAssertTrue(ok, "emitted: \(e.all)")
+    }
+
+    func testDeadParentSubagentsExcluded() async throws {
+        let (dir, projects) = (try makeTempDir(), try makeTempDir())
+        defer { [dir, projects].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let alive = try spawnSleeper(); defer { alive.terminate() }
+        let alivePid = Int(alive.processIdentifier)
+        let dead = try deadPid()
+        try write(dir, pid: alivePid, status: "idle", name: "살아있음")
+        try write(dir, pid: dead, status: "busy", name: "죽음")
+        try writeAgent(projects, parentPid: alivePid, id: "a", description: "산 부모의 자식")
+        try writeAgent(projects, parentPid: dead, id: "b", description: "죽은 부모의 자식")
+        // 세션 파일이 아예 없는 sessionId 의 서브에이전트도 무시
+        try writeAgent(projects, parentPid: 999_999, id: "c", description: "고아")
+        let m = monitor(dir, projects)
+        let (e, task) = collect(m)
+        m.start(); defer { m.stop(); task.cancel() }
+        let ok = await waitUntil { e.latest?.numbers == [1, 0, 1] }
+        XCTAssertTrue(ok, "emitted: \(e.all)")
+        XCTAssertEqual(e.latest?.activeNames, ["↳ 산 부모의 자식"])
+    }
+
+    func testEmptyOrMissingDescriptionFallsBack() async throws {
+        let (dir, projects) = (try makeTempDir(), try makeTempDir())
+        defer { [dir, projects].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let p = try spawnSleeper(); defer { p.terminate() }
+        let pid = Int(p.processIdentifier)
+        try write(dir, pid: pid, status: "idle")
+        try writeAgent(projects, parentPid: pid, id: "a", description: "")
+        try writeAgent(projects, parentPid: pid, id: "b", description: "  \n ")
+        try writeAgent(projects, parentPid: pid, id: "c", description: nil)
+        let m = monitor(dir, projects)
+        let (e, task) = collect(m)
+        m.start(); defer { m.stop(); task.cancel() }
+        let ok = await waitUntil { e.latest?.numbers == [3, 0, 1] }
+        XCTAssertTrue(ok, "emitted: \(e.all)")
+        XCTAssertEqual(e.latest?.activeNames, Array(repeating: "↳ 서브에이전트", count: 3))
+    }
+
+    func testNestedSubagentIncluded() async throws {
+        let (dir, projects) = (try makeTempDir(), try makeTempDir())
+        defer { [dir, projects].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let p = try spawnSleeper(); defer { p.terminate() }
+        let pid = Int(p.processIdentifier)
+        try write(dir, pid: pid, status: "busy", name: "부모")
+        try writeAgent(projects, parentPid: pid, id: "a", description: "1단계", depth: 1)
+        try writeAgent(projects, parentPid: pid, id: "b", description: "2단계", depth: 2)
+        let m = monitor(dir, projects)
+        let (e, task) = collect(m)
+        m.start(); defer { m.stop(); task.cancel() }
+        let ok = await waitUntil { e.latest?.numbers == [3, 0, 0] }
+        XCTAssertTrue(ok, "emitted: \(e.all)")
+        XCTAssertEqual(e.latest?.activeNames, ["부모", "↳ 1단계", "↳ 2단계"])
+    }
+
+    func testFindsSessionAcrossAnyProjectDirectory() async throws {
+        let (dir, projects) = (try makeTempDir(), try makeTempDir())
+        defer { [dir, projects].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let p = try spawnSleeper(); defer { p.terminate() }
+        let pid = Int(p.processIdentifier)
+        try write(dir, pid: pid, status: "idle")
+        try writeAgent(projects, parentPid: pid, id: "a", description: "엉뚱한 인코딩 디렉터리", project: "아무-이름-1")
+        try FileManager.default.createDirectory(at: projects.appendingPathComponent("빈-프로젝트"), withIntermediateDirectories: true)
+        let m = monitor(dir, projects)
+        let (e, task) = collect(m)
+        m.start(); defer { m.stop(); task.cancel() }
+        let ok = await waitUntil { e.latest?.numbers == [1, 0, 1] }
+        XCTAssertTrue(ok, "emitted: \(e.all)")
+    }
+
+    func testMissingProjectsDirectoryIsHarmless() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let p = try spawnSleeper(); defer { p.terminate() }
+        try write(dir, pid: Int(p.processIdentifier), status: "busy")
+        let m = monitor(dir, FileManager.default.temporaryDirectory.appendingPathComponent("nope-\(UUID().uuidString)"))
+        let (e, task) = collect(m)
+        m.start(); defer { m.stop(); task.cancel() }
+        let ok = await waitUntil { e.latest?.numbers == [1, 0, 0] }
+        XCTAssertTrue(ok, "emitted: \(e.all)")
+    }
+
+    /// 서브에이전트 meta 생성 -> 종료(finished) -> 삭제가 projects 디렉터리 감시만으로 반영된다(주기 재스캔 60초 -> 사실상 비활성).
+    func testEmitsOnSubagentMetaCreateAndFinish() async throws {
+        let (dir, projects) = (try makeTempDir(), try makeTempDir())
+        defer { [dir, projects].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let p = try spawnSleeper(); defer { p.terminate() }
+        let pid = Int(p.processIdentifier)
+        try write(dir, pid: pid, status: "idle", name: "부모")
+        let m = monitor(dir, projects)
+        let (e, task) = collect(m)
+        m.start(); defer { m.stop(); task.cancel() }
+        var ok = await waitUntil { e.latest?.numbers == [0, 0, 1] }
+        XCTAssertTrue(ok, "initial: \(e.all)")
+
+        try writeAgent(projects, parentPid: pid, id: "a", description: "첫째")
+        ok = await waitUntil { e.latest?.numbers == [1, 0, 1] }
+        XCTAssertTrue(ok, "spawn: \(e.all)")
+        XCTAssertEqual(e.latest?.activeNames, ["↳ 첫째"])
+
+        try writeAgent(projects, parentPid: pid, id: "b", description: "둘째")
+        ok = await waitUntil { e.latest?.numbers == [2, 0, 1] }
+        XCTAssertTrue(ok, "second spawn: \(e.all)")
+
+        try writeAgent(projects, parentPid: pid, id: "a", description: "첫째", finished: true)
+        ok = await waitUntil { e.latest?.numbers == [1, 0, 1] }
+        XCTAssertTrue(ok, "finish: \(e.all)")
+        XCTAssertEqual(e.latest?.activeNames, ["↳ 둘째"])
+
+        // 결과가 같은 jsonl append 는 emit 하지 않는다
+        let before = e.all.count
+        let jsonl = projects.appendingPathComponent("-proj/s-\(pid)/subagents/agent-b.jsonl")
+        let h = try FileHandle(forWritingTo: jsonl)
+        try h.seekToEnd(); try h.write(contentsOf: Data("{}\n".utf8)); try h.close()
+        try await Task.sleep(nanoseconds: 700_000_000)
+        XCTAssertEqual(e.all.count, before, "unchanged counts must not re-emit: \(e.all)")
+    }
+
+    /// 파일 변경 없이 시간만 지나 stale 이 되는 경우는 주기 재스캔이 잡는다.
+    func testPeriodicRescanDropsStaleSubagent() async throws {
+        let (dir, projects) = (try makeTempDir(), try makeTempDir())
+        defer { [dir, projects].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let p = try spawnSleeper(); defer { p.terminate() }
+        let pid = Int(p.processIdentifier)
+        try write(dir, pid: pid, status: "idle")
+        // 임계값 직전(2초 남음)으로 설정
+        try writeAgent(projects, parentPid: pid, id: "a", description: "곧 만료", age: SessionMonitor.subagentStaleThreshold - 2)
+        let m = monitor(dir, projects, rescan: 0.5)
+        let (e, task) = collect(m)
+        m.start(); defer { m.stop(); task.cancel() }
+        var ok = await waitUntil { e.latest?.numbers == [1, 0, 1] }
+        XCTAssertTrue(ok, "initial: \(e.all)")
+        ok = await waitUntil(timeout: 6) { e.latest?.numbers == [0, 0, 1] }
+        XCTAssertTrue(ok, "after stale: \(e.all)")
+    }
+
+    func testSubagentNameRules() {
+        XCTAssertEqual(SessionMonitor.subagentName(description: " 작업 "), "↳ 작업")
+        XCTAssertEqual(SessionMonitor.subagentName(description: ""), "↳ 서브에이전트")
+        XCTAssertEqual(SessionMonitor.subagentName(description: nil), "↳ 서브에이전트")
+    }
+}
