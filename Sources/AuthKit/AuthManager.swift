@@ -30,7 +30,7 @@ public actor AuthManager: AuthManaging {
     private var loginTask: Task<StoredTokens, Error>?
     /// logout·로그인 성공마다 증가. 진행 중이던 refresh/login 결과가 그 이후 반영되지 않게 한다.
     private var generation = 0
-    /// 로그인 진행 중 refresh가 invalid_grant를 받았는지. 로그인 실패 시 `.expired`로 정리한다.
+    /// 로그인 진행 중 refresh가 세션 만료 응답(400/401/403)을 받았는지. 로그인 실패 시 `.expired`로 정리한다.
     private var expiredDuringLogin = false
 
     public init(
@@ -47,7 +47,16 @@ public actor AuthManager: AuthManaging {
         self.openURL = openURL
         self.now = now
         self.callbackTimeout = callbackTimeout
-        let loaded = (try? store.load()) ?? nil
+        // 읽기 실패(예: 서명이 바뀌어 키체인 접근이 거부됨)는 로그아웃 상태로 시작하되 원인을 남긴다.
+        // 항목은 지우지 않는다. 나중에 접근을 허용하면 다시 읽을 수 있기 때문이다.
+        let loaded: StoredTokens?
+        do {
+            loaded = try store.load()
+        } catch {
+            let reason = (error as? AuthError).map { "\($0)" } ?? String(describing: type(of: error))
+            Self.log.error("저장된 토큰 읽기 실패: \(reason, privacy: .public)")
+            loaded = nil
+        }
         self.tokens = loaded
         self.currentState = loaded == nil ? .signedOut : .signedIn
         broadcaster.send(currentState)
@@ -140,6 +149,15 @@ public actor AuthManager: AuthManaging {
     public func invalidate(accessToken: String) async {
         guard tokens?.accessToken == accessToken else { return }
         tokens?.expiresAt = .distantPast
+    }
+
+    /// refresh한 토큰까지 서버가 거부하면 세션을 만료시킨다(로그인 필요 상태로 전환).
+    /// 그 사이 다른 토큰으로 바뀌었거나 로그인 중이면 새 세션을 건드리지 않도록 무시한다.
+    public func reject(accessToken: String) async {
+        guard tokens?.accessToken == accessToken, currentState != .signingIn else { return }
+        tokens = nil
+        try? store.delete()
+        setState(.expired)
     }
 
     /// 진행 중인 refresh/login을 무효화하고 로컬 토큰을 지운 뒤 서버에 revoke를 시도한다.
@@ -245,7 +263,8 @@ public actor AuthManager: AuthManaging {
         // 요청 중 logout/새 로그인이 있었으면 이 결과는 버리고 현재 토큰을 돌려준다.
         if isSuperseded(generation: gen, refreshToken: refreshToken) { return try currentTokens() }
         if response.statusCode != 200 {
-            if (response.statusCode == 400 || response.statusCode == 401) && Self.oauthErrorCode(data) == "invalid_grant" {
+            // 400/401/403은 오류 코드와 상관없이 다시 시도해도 성공하지 않으므로 세션을 만료시킨다.
+            if [400, 401, 403].contains(response.statusCode) {
                 tokens = nil
                 if currentState == .signingIn {
                     // 로그인 진행 중엔 상태/저장소를 건드리지 않는다(중복 로그인 가드 유지). 실패 시 runLogin이 정리.
@@ -328,14 +347,6 @@ public actor AuthManager: AuthManaging {
             expiresAt: now().addingTimeInterval(r.expires_in),
             scopes: scopes
         )
-    }
-
-    /// `{"error":"invalid_grant"}` 또는 `{"error":{"type":"invalid_grant"}}` 모두 처리.
-    static func oauthErrorCode(_ data: Data) -> String? {
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        if let s = obj["error"] as? String { return s }
-        if let o = obj["error"] as? [String: Any] { return o["type"] as? String }
-        return nil
     }
 
     private func setState(_ newState: AuthState) {

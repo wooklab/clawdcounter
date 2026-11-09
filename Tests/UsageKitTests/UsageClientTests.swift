@@ -35,8 +35,18 @@ final class UsageClientTests: XCTestCase {
         let snap = try await client.fetch()
         XCTAssertEqual(snap.weekly?.usedPercent, 42)
         XCTAssertEqual(tokens.invalidated, ["AT_OLD"])
+        XCTAssertEqual(tokens.rejected, [])
         XCTAssertEqual(transport.requests.map { $0.value(forHTTPHeaderField: "Authorization") },
                        ["Bearer AT_OLD", "Bearer AT_NEW"])
+    }
+
+    func testUnauthorizedAfterRefreshRejectsNewToken() async {
+        let tokens = RotatingTokens(["AT_OLD", "AT_NEW"])
+        let transport = StubTransport { _ in StubTransport.response(401, "{}") }
+        let client = UsageClient(tokens: tokens, transport: transport, rawStore: nil, now: { fixedNow })
+        await assertThrows(client, .unauthorized)
+        XCTAssertEqual(tokens.invalidated, ["AT_OLD"])
+        XCTAssertEqual(tokens.rejected, ["AT_NEW"])
     }
 
     func testUnauthorizedThenTokenUnavailable() async {

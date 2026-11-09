@@ -41,6 +41,7 @@ public struct UsageClient: UsageProviding {
     }
 
     /// 401 을 받으면 그 토큰을 무효화하고 refresh 한 토큰으로 한 번만 다시 요청한다.
+    /// 다시 받은 토큰도 401 이면 세션을 만료시킨다.
     public func fetch() async throws -> UsageSnapshot {
         var (data, response, token) = try await send()
         if response.statusCode == 401 {
@@ -50,7 +51,9 @@ public struct UsageClient: UsageProviding {
 
         switch response.statusCode {
         case 200..<300: break
-        case 401: throw UsageError.unauthorized
+        case 401:
+            await tokens.reject(accessToken: token)
+            throw UsageError.unauthorized
         case 429: throw UsageError.rateLimited(retryAfter: Self.retryAfter(response, now: now()))
         default: throw UsageError.http(status: response.statusCode)
         }
