@@ -10,6 +10,7 @@ struct StubTokens: TokenProviding {
         return token
     }
     func invalidate(accessToken: String) async {}
+    func reject(accessToken: String) async {}
 }
 
 /// 401 재시도 검증용: `invalidate` 되면 다음 토큰을 내준다. 토큰이 다 떨어지면 `error` 를 던진다.
@@ -30,6 +31,11 @@ final class RotatingTokens: TokenProviding, @unchecked Sendable {
             _invalidated.append(accessToken)
             if queue.first == accessToken { queue.removeFirst() }
         }
+    }
+    private var _rejected: [String] = []
+    var rejected: [String] { lock.withLock { _rejected } }
+    func reject(accessToken: String) async {
+        lock.withLock { _rejected.append(accessToken) }
     }
 }
 

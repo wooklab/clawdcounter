@@ -219,6 +219,43 @@ final class AuthManagerTests: XCTestCase {
         XCTAssertEqual(state, .expired)
     }
 
+    func testForbiddenWithoutErrorCodeExpiresSession() async throws {
+        let clock = TestClock()
+        let store = InMemoryTokenStore(storedTokens(expiresIn: 0, clock: clock))
+        let transport = StubTransport { _ in StubTransport.response(403, "{}") }
+        let m = makeManager(store: store, transport: transport, clock: clock)
+        do { _ = try await m.validAccessToken(); XCTFail() } catch {
+            XCTAssertEqual(error as? AuthError, .sessionExpired)
+        }
+        let state = await m.state
+        XCTAssertEqual(state, .expired)
+        XCTAssertNil(try store.load())
+    }
+
+    func testRejectCurrentTokenExpiresSession() async throws {
+        let clock = TestClock()
+        let store = InMemoryTokenStore(storedTokens(expiresIn: 3600, clock: clock))
+        let m = makeManager(store: store, transport: StubTransport { _ in XCTFail(); throw URLError(.unknown) }, clock: clock)
+        await m.reject(accessToken: "AT_OLD")
+        let state = await m.state
+        XCTAssertEqual(state, .expired)
+        XCTAssertNil(try store.load())
+        do { _ = try await m.validAccessToken(); XCTFail() } catch {
+            XCTAssertEqual(error as? AuthError, .sessionExpired)
+        }
+    }
+
+    func testRejectOtherTokenKeepsSession() async throws {
+        let clock = TestClock()
+        let store = InMemoryTokenStore(storedTokens(expiresIn: 3600, clock: clock))
+        let m = makeManager(store: store, transport: StubTransport { _ in XCTFail(); throw URLError(.unknown) }, clock: clock)
+        await m.reject(accessToken: "AT_STALE")
+        let state = await m.state
+        XCTAssertEqual(state, .signedIn)
+        let token = try await m.validAccessToken()
+        XCTAssertEqual(token, "AT_OLD")
+    }
+
     func testTransientErrorKeepsSession() async throws {
         let clock = TestClock()
         let store = InMemoryTokenStore(storedTokens(expiresIn: 0, clock: clock))
