@@ -18,6 +18,8 @@ final class UsagePoller {
     private var task: Task<Void, Never>?
     private var generation = 0
     private var failures = 0
+    /// 마지막 실패가 429 였는지. 이때는 서버가 정한 대기를 지키기 위해 수동 갱신을 받지 않는다.
+    private var rateLimited = false
     private var isFetching = false
     private var lastAttempt: Date?
 
@@ -38,6 +40,7 @@ final class UsagePoller {
     /// 폴링 시작(이미 돌고 있으면 재시작). 백오프 상태는 초기화한다.
     func start(immediate: Bool = true) {
         failures = 0
+        rateLimited = false
         launch(initialDelay: immediate ? 0 : interval())
     }
 
@@ -54,9 +57,16 @@ final class UsagePoller {
         launch(initialDelay: nextDelay(retryAfter: nil))
     }
 
-    /// 메뉴 열기 등 즉시 갱신 요청. 백오프 중이거나 직전 시도가 너무 최근이면 무시한다.
+    /// 잠자기에서 깨어난 경우: 잠들기 전 실패로 쌓인 백오프를 버리고 바로 조회한다.
+    func wake() {
+        guard task != nil else { return }
+        start(immediate: true)
+    }
+
+    /// 메뉴 열기 등 즉시 갱신 요청. 429 백오프 중이거나 직전 시도가 너무 최근이면 무시한다.
+    /// 네트워크 오류 등 다른 실패 뒤에는 받아들여서, 연결이 돌아왔을 때 백오프가 끝날 때까지 기다리지 않게 한다.
     func refreshNow() {
-        guard task != nil, !isFetching, failures == 0 else { return }
+        guard task != nil, !isFetching, !rateLimited else { return }
         if let last = lastAttempt, Date().timeIntervalSince(last) < Self.minManualGap { return }
         launch(initialDelay: 0)
     }
@@ -90,6 +100,7 @@ final class UsagePoller {
             let snapshot = try await client.fetch()
             guard gen == generation else { return nil }
             failures = 0
+            rateLimited = false
             isFetching = false
             onSuccess(snapshot)
         } catch is CancellationError {
@@ -99,6 +110,7 @@ final class UsagePoller {
             failures += 1
             isFetching = false
             retryAfter = (error as? UsageError)?.retryAfter
+            if case .rateLimited = error as? UsageError { rateLimited = true } else { rateLimited = false }
             onFailure()
         }
         return nextDelay(retryAfter: retryAfter)
