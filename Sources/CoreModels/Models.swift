@@ -132,6 +132,8 @@ public enum AuthState: Equatable, Sendable { case signedOut, signingIn, signedIn
 
 public protocol TokenProviding: Sendable {
     func validAccessToken() async throws -> String // 필요 시 refresh
+    /// 서버가 이 액세스 토큰을 거부(401)했다. 아직 현재 토큰이면 다음 `validAccessToken()` 이 refresh 하게 만든다.
+    func invalidate(accessToken: String) async
 }
 
 public protocol AuthManaging: TokenProviding {

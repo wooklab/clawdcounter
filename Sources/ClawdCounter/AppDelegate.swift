@@ -62,6 +62,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAc
             for await counts in countsStream { self?.model.counts = counts }
         })
 
+        // 잠자기 동안 쌓인 실패 백오프를 버리고 깨어나자마자 다시 조회한다.
+        let wakes = NSWorkspace.shared.notificationCenter.notifications(named: NSWorkspace.didWakeNotification)
+        backgroundTasks.append(Task { [weak self] in
+            for await _ in wakes { self?.poller.wake() }
+        })
+
         // 남은 시간 표기가 시간에 따라 변하므로 주기적으로 다시 그린다.
         backgroundTasks.append(Task { [weak self] in
             while !Task.isCancelled {

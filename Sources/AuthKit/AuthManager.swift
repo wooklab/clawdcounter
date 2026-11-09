@@ -135,6 +135,13 @@ public actor AuthManager: AuthManaging {
         }
     }
 
+    /// 만료 전이라도 서버가 거부한 토큰은 만료된 것으로 취급한다(메모리만 바꾸고 저장소는 refresh 결과로 갱신된다).
+    /// 그 사이 이미 다른 토큰으로 바뀌었으면 아무것도 하지 않는다.
+    public func invalidate(accessToken: String) async {
+        guard tokens?.accessToken == accessToken else { return }
+        tokens?.expiresAt = .distantPast
+    }
+
     /// 진행 중인 refresh/login을 무효화하고 로컬 토큰을 지운 뒤 서버에 revoke를 시도한다.
     /// 참고: refresh 요청이 이미 서버에 도달한 경우 회전된 새 refresh 토큰은 받지 못하므로 revoke되지 않는다.
     public func logout() async {

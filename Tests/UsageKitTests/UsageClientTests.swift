@@ -20,8 +20,33 @@ final class UsageClientTests: XCTestCase {
     }
 
     func testUnauthorized() async {
-        let (client, _) = makeClient { _ in StubTransport.response(401, #"{"error":"bearer test-token-xyz"}"#) }
+        let (client, transport) = makeClient { _ in StubTransport.response(401, #"{"error":"bearer test-token-xyz"}"#) }
         await assertThrows(client, .unauthorized)
+        XCTAssertEqual(transport.requests.count, 2, "401 이면 한 번만 다시 시도한다")
+    }
+
+    func testUnauthorizedRetriesOnceWithRefreshedToken() async throws {
+        let tokens = RotatingTokens(["AT_OLD", "AT_NEW"])
+        let transport = StubTransport { req in
+            req.value(forHTTPHeaderField: "Authorization") == "Bearer AT_NEW"
+                ? StubTransport.response(200, okBody) : StubTransport.response(401, "{}")
+        }
+        let client = UsageClient(tokens: tokens, transport: transport, rawStore: nil, now: { fixedNow })
+        let snap = try await client.fetch()
+        XCTAssertEqual(snap.weekly?.usedPercent, 42)
+        XCTAssertEqual(tokens.invalidated, ["AT_OLD"])
+        XCTAssertEqual(transport.requests.map { $0.value(forHTTPHeaderField: "Authorization") },
+                       ["Bearer AT_OLD", "Bearer AT_NEW"])
+    }
+
+    func testUnauthorizedThenTokenUnavailable() async {
+        let tokens = RotatingTokens(["AT_OLD"])
+        let transport = StubTransport { _ in StubTransport.response(401, "{}") }
+        let client = UsageClient(tokens: tokens, transport: transport, rawStore: nil, now: { fixedNow })
+        do { _ = try await client.fetch(); XCTFail("expected tokenUnavailable") } catch {
+            XCTAssertEqual(error as? UsageError, .tokenUnavailable)
+        }
+        XCTAssertEqual(transport.requests.count, 1)
     }
 
     func testRateLimitedWithRetryAfterSeconds() async {
