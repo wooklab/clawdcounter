@@ -129,6 +129,29 @@ final class AuthManagerTests: XCTestCase {
         XCTAssertEqual(saved.expiresAt, clock.now.addingTimeInterval(3600))
     }
 
+    func testInvalidateForcesRefreshBeforeExpiry() async throws {
+        let clock = TestClock()
+        let store = InMemoryTokenStore(storedTokens(expiresIn: 3600, clock: clock))
+        let transport = StubTransport { [tokenJSON] _ in StubTransport.response(200, tokenJSON) }
+        let m = makeManager(store: store, transport: transport, clock: clock)
+
+        await m.invalidate(accessToken: "AT_OLD")
+        let token = try await m.validAccessToken()
+        XCTAssertEqual(token, "AT_NEW")
+        XCTAssertEqual(transport.requests.count, 1)
+        XCTAssertEqual(try store.load()?.accessToken, "AT_NEW")
+    }
+
+    func testInvalidateIgnoresOtherToken() async throws {
+        let clock = TestClock()
+        let transport = StubTransport { _ in XCTFail("no network"); throw URLError(.badURL) }
+        let m = makeManager(store: InMemoryTokenStore(storedTokens(expiresIn: 3600, clock: clock)),
+                            transport: transport, clock: clock)
+        await m.invalidate(accessToken: "AT_SOMETHING_ELSE")
+        let token = try await m.validAccessToken()
+        XCTAssertEqual(token, "AT_OLD")
+    }
+
     func testRefreshKeepsOldRefreshTokenWhenNotRotated() async throws {
         let clock = TestClock()
         let store = InMemoryTokenStore(storedTokens(expiresIn: 0, clock: clock))

@@ -9,6 +9,28 @@ struct StubTokens: TokenProviding {
         if let error { throw error }
         return token
     }
+    func invalidate(accessToken: String) async {}
+}
+
+/// 401 재시도 검증용: `invalidate` 되면 다음 토큰을 내준다. 토큰이 다 떨어지면 `error` 를 던진다.
+final class RotatingTokens: TokenProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var queue: [String]
+    private var _invalidated: [String] = []
+    init(_ tokens: [String]) { queue = tokens }
+    var invalidated: [String] { lock.withLock { _invalidated } }
+    func validAccessToken() async throws -> String {
+        try lock.withLock {
+            guard let first = queue.first else { throw URLError(.userAuthenticationRequired) }
+            return first
+        }
+    }
+    func invalidate(accessToken: String) async {
+        lock.withLock {
+            _invalidated.append(accessToken)
+            if queue.first == accessToken { queue.removeFirst() }
+        }
+    }
 }
 
 final class StubTransport: UsageTransport, @unchecked Sendable {

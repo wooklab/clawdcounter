@@ -40,36 +40,12 @@ public struct UsageClient: UsageProviding {
         self.now = now
     }
 
+    /// 401 을 받으면 그 토큰을 무효화하고 refresh 한 토큰으로 한 번만 다시 요청한다.
     public func fetch() async throws -> UsageSnapshot {
-        let token: String
-        do {
-            token = try await tokens.validAccessToken()
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            throw UsageError.tokenUnavailable
-        }
-
-        var request = URLRequest(url: Self.endpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-        request.setValue("ClawdCounter/0.1", forHTTPHeaderField: "User-Agent")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-
-        let data: Data
-        let response: HTTPURLResponse
-        do {
-            (data, response) = try await transport.perform(request)
-        } catch let error as UsageError {
-            throw error
-        } catch let error as URLError {
-            if error.code == .cancelled { throw CancellationError() }
-            throw UsageError.network(error.code)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            throw UsageError.network(.unknown)
+        var (data, response, token) = try await send()
+        if response.statusCode == 401 {
+            await tokens.invalidate(accessToken: token)
+            (data, response, token) = try await send()
         }
 
         switch response.statusCode {
@@ -86,6 +62,38 @@ public struct UsageClient: UsageProviding {
             log.info("unmapped usage keys: \(keys, privacy: .public)")
         }
         return result.snapshot
+    }
+
+    private func send() async throws -> (Data, HTTPURLResponse, token: String) {
+        let token: String
+        do {
+            token = try await tokens.validAccessToken()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw UsageError.tokenUnavailable
+        }
+
+        var request = URLRequest(url: Self.endpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        request.setValue("ClawdCounter/0.1", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        do {
+            let (data, response) = try await transport.perform(request)
+            return (data, response, token)
+        } catch let error as UsageError {
+            throw error
+        } catch let error as URLError {
+            if error.code == .cancelled { throw CancellationError() }
+            throw UsageError.network(error.code)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw UsageError.network(.unknown)
+        }
     }
 
     /// `Retry-After`: 초 또는 HTTP-date. 음수/파싱 실패는 nil.
