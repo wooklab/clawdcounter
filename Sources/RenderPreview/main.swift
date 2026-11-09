@@ -305,4 +305,119 @@ for lang in Language.allCases {
     try dump.write(to: dumpURL, atomically: true, encoding: .utf8)
     written.append(dumpURL.path)
 }
+
+// README 스크린샷: 메뉴바 항목과 펼친 드롭다운 전체를 가짜 데이터로 합성한다.
+// (docs/images/readme-menu-<언어>-<light|dark>.png)
+@MainActor final class PreviewSeparatorRow: NSView {
+    override var isFlipped: Bool { true }
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.separatorColor.setFill()
+        NSRect(x: 14, y: floor(bounds.midY), width: bounds.width - 28, height: 1).fill()
+    }
+}
+
+@MainActor func readmePNG(mode: Mode, lang: Language) -> Data {
+    let usage = UsageSnapshot(
+        fiveHour: win(42, in: 2 * h + 13 * 60), weekly: win(63, in: 3 * 86400 + 5 * h), fetchedAt: now)
+    // 세션명은 사용자가 정하는 값이라, 문서 언어에 맞춘 예시를 쓴다.
+    let names: [String] = switch lang {
+    case .ko: ["clawdcounter 드롭다운", "README 스크린샷", "릴리스 노트 정리"]
+    case .en: ["clawdcounter dropdown", "README screenshots", "Draft release notes"]
+    case .zhHans: ["clawdcounter 下拉菜单", "README 截图", "整理发布说明"]
+    case .ja: ["clawdcounter ドロップダウン", "README スクリーンショット", "リリースノート整理"]
+    }
+    let sessions = SessionCounts(
+        active: 2, waiting: 1, idle: 3,
+        activeSessions: names.prefix(2).map { SessionRef(name: $0) },
+        waitingSessions: [SessionRef(name: names[2])],
+        idleSessions: ["docs", "refactor-auth", "landing-page"].map { SessionRef(name: $0) })
+    let menu = MenuBuilder(actions: actions).buildMenu(
+        usage: usage, sessions: sessions, auth: .signedIn,
+        settings: MenuSettings(launchAtLogin: true, refreshMinutes: 1), now: now, lang: lang)
+    let views: [NSView] = menu.items.map { item in
+        if item.isSeparatorItem { return PreviewSeparatorRow(frame: NSRect(x: 0, y: 0, width: 0, height: 11)) }
+        return item.view ?? PreviewTextRow(title: item.title)
+    }
+    let menuW = max(views.map { $0.frame.width }.max() ?? 0, 300)
+    let rows: [NSBitmapImageRep] = views.map { v in
+        v.frame.size.width = menuW
+        let root = PreviewBackdrop(frame: v.bounds)
+        root.color = mode.background
+        root.appearance = mode.appearance
+        root.addSubview(v)
+        let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: Int(menuW) * scale, pixelsHigh: Int(v.bounds.height) * scale,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        rep.size = v.bounds.size
+        root.cacheDisplay(in: root.bounds, to: rep)
+        return rep
+    }
+    let status = StatusItemRenderer.image(
+        usage: usage, sessions: sessions, auth: .signedIn, now: now, appearance: mode.appearance, lang: lang)
+
+    let margin: CGFloat = 24, barH: CGFloat = 28, menuPad: CGFloat = 5
+    let menuH = rows.reduce(menuPad * 2) { $0 + $1.size.height }
+    let statusX = margin + 24
+    let panelX = statusX - 6
+    let width = ceil(max(panelX + menuW + margin, statusX + status.size.width + margin))
+    let height = ceil(barH + 4 + menuH + margin)
+    let desktop = mode == .light ? NSColor(srgbRed: 0.80, green: 0.84, blue: 0.89, alpha: 1)
+                                 : NSColor(srgbRed: 0.10, green: 0.11, blue: 0.13, alpha: 1)
+    let bar = mode == .light ? NSColor(srgbRed: 0.96, green: 0.96, blue: 0.96, alpha: 1)
+                             : NSColor(srgbRed: 0.20, green: 0.20, blue: 0.21, alpha: 1)
+
+    let out = NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: Int(width) * scale, pixelsHigh: Int(height) * scale,
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    out.size = NSSize(width: width, height: height)
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: out)
+    mode.appearance.performAsCurrentDrawingAppearance {
+        desktop.setFill(); NSRect(x: 0, y: 0, width: width, height: height).fill()
+        bar.setFill(); NSRect(x: 0, y: height - barH, width: width, height: barH).fill()
+
+        // 메뉴가 열린 상태의 메뉴바 항목 강조
+        let itemRect = NSRect(x: statusX - 6, y: height - barH + 3, width: status.size.width + 12, height: barH - 6)
+        (mode == .light ? NSColor.black.withAlphaComponent(0.1) : NSColor.white.withAlphaComponent(0.18)).setFill()
+        NSBezierPath(roundedRect: itemRect, xRadius: 5, yRadius: 5).fill()
+        status.draw(in: NSRect(
+            x: statusX, y: height - barH + (barH - status.size.height) / 2,
+            width: status.size.width, height: status.size.height))
+
+        let panel = NSRect(x: panelX, y: height - barH - 4 - menuH, width: menuW, height: menuH)
+        let path = NSBezierPath(roundedRect: panel, xRadius: 10, yRadius: 10)
+        NSGraphicsContext.saveGraphicsState()
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(mode == .light ? 0.25 : 0.6)
+        shadow.shadowBlurRadius = 14
+        shadow.shadowOffset = NSSize(width: 0, height: -4)
+        shadow.set()
+        mode.background.setFill(); path.fill()
+        NSGraphicsContext.restoreGraphicsState()
+
+        NSGraphicsContext.saveGraphicsState()
+        path.addClip()
+        var top = panel.maxY - menuPad
+        for rep in rows {
+            top -= rep.size.height
+            rep.draw(in: NSRect(x: panel.minX, y: top, width: rep.size.width, height: rep.size.height))
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        NSColor.separatorColor.setStroke(); path.lineWidth = 1; path.stroke()
+    }
+    NSGraphicsContext.restoreGraphicsState()
+    return out.representation(using: .png, properties: [:])!
+}
+
+let imagesDir = URL(fileURLWithPath: "docs/images", isDirectory: true)
+try FileManager.default.createDirectory(at: imagesDir, withIntermediateDirectories: true)
+for lang in Language.allCases {
+    for mode in Mode.allCases {
+        let url = imagesDir.appendingPathComponent("readme-menu-\(lang.rawValue)-\(mode.rawValue).png")
+        try readmePNG(mode: mode, lang: lang).write(to: url)
+        written.append(url.path)
+    }
+}
 print(written.joined(separator: "\n"))

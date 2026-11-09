@@ -6,6 +6,14 @@
 
 Claude 사용량 한도와 로컬 Claude Code 세션 현황을 macOS 메뉴바에 보여주는 비공식 앱입니다.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme-menu-ko-dark.png">
+    <img src="docs/images/readme-menu-ko-light.png" alt="메뉴바 항목과 펼친 드롭다운 메뉴" width="380">
+  </picture>
+</p>
+<p align="center"><sub>예시 데이터로 렌더링한 화면입니다.</sub></p>
+
 ## 기능
 
 - **메뉴바 표기**: `5시간 한도 남은 시간 | [5시간 바 / 주간 바] | ● 활성 수 / ○ 비활성 수 | ✋ 응답대기`
@@ -40,9 +48,17 @@ Claude 사용량 한도와 로컬 Claude Code 세션 현황을 macOS 메뉴바�
 ## 요구 사항
 
 - macOS 14 이상
-- Xcode와 Swift 6 툴체인 (`swift-tools-version: 6.0`)
+- 릴리스 앱: Apple Silicon Mac (Intel Mac은 소스에서 직접 빌드해야 합니다)
+- 소스 빌드: Xcode와 Swift 6 툴체인 (`swift-tools-version: 6.0`)
 
 ## 설치 / 빌드
+
+### 릴리스에서 내려받기
+
+1. [Releases](https://github.com/wooklab/clawdcounter/releases/latest)에서 `ClawdCounter-<버전>.dmg`를 내려받아 엽니다.
+2. `ClawdCounter.app`을 `Applications` 폴더로 끌어다 놓습니다.
+
+### 소스에서 빌드
 
 ```sh
 git clone https://github.com/wooklab/clawdcounter.git
@@ -55,12 +71,12 @@ open build/ClawdCounter.app
 
 ### 첫 실행 경고
 
-빌드 스크립트는 임시(ad-hoc) 서명(`codesign --sign -`)만 합니다. 직접 빌드한 앱은 보통 경고 없이 실행되지만, 다른 곳에서 내려받았거나 압축해 옮긴 앱은 Gatekeeper 경고가 뜰 수 있습니다. 그럴 때는 다음 중 하나를 쓰세요.
+릴리스 앱과 빌드 스크립트 모두 임시(ad-hoc) 서명(`codesign --sign -`)만 하며, Apple 공증은 받지 않았습니다. 직접 빌드한 앱은 보통 경고 없이 실행되지만, 릴리스에서 내려받은 앱은 처음 실행할 때 Gatekeeper가 막습니다. 그럴 때는 다음 중 하나를 쓰세요.
 
-- Finder에서 `build/ClawdCounter.app`을 우클릭 → **열기**
-- 또는 `xattr -dr com.apple.quarantine build/ClawdCounter.app`
+- 경고 창을 닫은 뒤 **시스템 설정 → 개인정보 보호 및 보안**에서 ClawdCounter 항목의 **그래도 열기**를 누릅니다.
+- 또는 `xattr -dr com.apple.quarantine /Applications/ClawdCounter.app`을 실행합니다.
 
-`xattr` 명령은 **본인이 직접 빌드한 앱에만** 사용하세요. 출처를 모르는 앱에 쓰면 안 됩니다.
+`xattr` 명령은 **이 저장소의 릴리스나 본인이 직접 빌드한 앱에만** 사용하세요. 출처를 모르는 앱에 쓰면 안 됩니다.
 
 ### 키체인 확인창
 
@@ -105,7 +121,7 @@ open build/ClawdCounter.app
 - 세션 초기화 사용권(티켓) 개수는 실제 응답에서 필드를 찾지 못해 **지원하지 않습니다**.
 - **응답대기** 상태는 `claude` 바이너리 분석으로 알아낸 값(`waiting`)에 기반하며, 실제 세션에서 확인하지는 못했습니다.
 - 세션명 클릭은 **앱 단위로 전면화**할 뿐 앱 안의 특정 탭/창/세션을 고르지는 않습니다. tmux처럼 부모 프로세스 사슬이 끊기는 경우는 앱을 찾지 못합니다.
-- 서명하지 않은(임시 서명) 로컬 빌드만 지원하며 배포용 바이너리는 제공하지 않습니다.
+- 릴리스 앱은 임시 서명만 했고 Apple 공증을 받지 않았으며, Apple Silicon 전용입니다.
 
 ## 개발
 
@@ -114,7 +130,7 @@ swift test                  # 전체 단위 테스트
 swift run RenderPreview     # 메뉴바 이미지/드롭다운 PNG 렌더 -> build/preview/
 ```
 
-`RenderPreview`는 프로젝트 루트에서 실행해야 하며, 라이트/다크별 PNG와 메뉴 구조 텍스트(`menus.txt`)를 `build/preview/`에 만듭니다.
+`RenderPreview`는 프로젝트 루트에서 실행해야 하며, 라이트/다크별 PNG와 메뉴 구조 텍스트(`menus.txt`)를 `build/preview/`에 만듭니다. README에 들어가는 언어별 화면 이미지(`docs/images/readme-menu-*.png`)도 함께 다시 만듭니다.
 
 ### `--probe-usage` 진단 플래그
 
