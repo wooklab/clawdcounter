@@ -451,6 +451,36 @@ final class FSEventsWatcherTests: XCTestCase {
         try await Task.sleep(nanoseconds: 500_000_000)
         XCTAssertEqual(counter.value, before, "no callback after deinit")
     }
+
+    func testPathFilterSkipsUnmatchedChanges() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let queue = DispatchQueue(label: "test.fsevents.filter")
+        let counter = Counter()
+        let watcher = FSEventsWatcher(path: dir.path, queue: queue, pathFilter: SessionMonitor.isSubagentPath) { counter.inc() }
+        queue.sync { watcher.start() }
+        defer { queue.sync { watcher.stop() } }
+
+        // 대화 기록처럼 subagents 밖에서 쓰이는 파일은 콜백을 일으키지 않는다.
+        let session = dir.appendingPathComponent("-proj/s-1", isDirectory: true)
+        try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+        for i in 0..<5 { try Data("{}\n".utf8).write(to: dir.appendingPathComponent("-proj/s-\(i).jsonl")) }
+        try await Task.sleep(nanoseconds: 700_000_000)
+        XCTAssertEqual(counter.value, 0, "non-subagent changes must be filtered out")
+
+        let sub = session.appendingPathComponent("subagents", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: sub.appendingPathComponent("agent-a.meta.json"))
+        let fired = await waitUntil { counter.value > 0 }
+        XCTAssertTrue(fired, "subagent changes must fire")
+    }
+
+    func testIsSubagentPath() {
+        XCTAssertTrue(SessionMonitor.isSubagentPath("/p/-proj/s1/subagents"))
+        XCTAssertTrue(SessionMonitor.isSubagentPath("/p/-proj/s1/subagents/agent-a.meta.json"))
+        XCTAssertFalse(SessionMonitor.isSubagentPath("/p/-proj/s1.jsonl"))
+        XCTAssertFalse(SessionMonitor.isSubagentPath("/p/-proj/my-subagents-notes.md"))
+    }
 }
 
 // MARK: - 서브에이전트

@@ -72,7 +72,10 @@ public final class SessionMonitor: SessionMonitoring, @unchecked Sendable {
             watcher.start()
             self.watcher = watcher
 
-            let projectsWatcher = FSEventsWatcher(path: projectsDirectory.path, queue: queue) { [weak self] in
+            // projects 아래 대화 기록(jsonl)은 작업 중 계속 쓰이므로, subagents 아래 변경만 스캔을 일으킨다.
+            let projectsWatcher = FSEventsWatcher(
+                path: projectsDirectory.path, queue: queue, pathFilter: Self.isSubagentPath
+            ) { [weak self] in
                 self?.scheduleDebouncedScan()
             }
             projectsWatcher.start()
@@ -218,6 +221,11 @@ public final class SessionMonitor: SessionMonitoring, @unchecked Sendable {
             let order = $0.ref.name.compare($1.ref.name, options: [.caseInsensitive, .numeric])
             return order == .orderedSame ? $0.key < $1.key : order == .orderedAscending
         }.map(\.ref)
+    }
+
+    /// projects 감시에서 스캔을 일으킬 경로인지: `.../<sessionId>/subagents` 디렉터리 자체나 그 아래 파일.
+    static func isSubagentPath(_ path: String) -> Bool {
+        path.hasSuffix("/subagents") || path.contains("/subagents/")
     }
 
     /// `↳ <description>`; description 이 비면 nil(UI 가 `.subagent` 대체 표시명 `↳ 서브에이전트` 를 그린다).
