@@ -22,6 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAc
     private var statusItem: NSStatusItem!
     private let menu = NSMenu()
     private var appearanceObservation: NSKeyValueObservation?
+    /// 마지막으로 그린 이미지의 라이트/다크 기준.
+    private var renderedAppearance: NSAppearance.Name?
     private var backgroundTasks: [Task<Void, Never>] = []
     private var loginTask: Task<Void, Never>?
     private var probePending = CommandLine.arguments.contains("--probe-usage")
@@ -45,8 +47,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAc
         statusItem.menu = menu
         if let button = statusItem.button {
             button.imagePosition = .imageOnly
+            // 이미지를 바꿀 때마다 외형 이름이 DarkAqua ↔ VibrantDark 처럼 번갈아 통지되므로,
+            // 라이트/다크 판정이 실제로 바뀐 경우에만 다시 그린다(무조건 그리면 무한 반복으로 CPU 100%).
             appearanceObservation = button.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
-                Task { @MainActor in self?.render() }
+                Task { @MainActor in
+                    guard let self, let button = self.statusItem?.button else { return }
+                    if Self.lightOrDark(button.effectiveAppearance) != self.renderedAppearance { self.render() }
+                }
             }
         }
         render()
@@ -104,10 +111,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, MenuAc
 
     private func render() {
         guard let button = statusItem?.button else { return }
+        renderedAppearance = Self.lightOrDark(button.effectiveAppearance)
         button.image = StatusItemRenderer.image(
             usage: model.usage, sessions: model.counts, auth: model.authState,
             appearance: button.effectiveAppearance
         )
+    }
+
+    private static func lightOrDark(_ appearance: NSAppearance) -> NSAppearance.Name? {
+        appearance.bestMatch(from: [.aqua, .darkAqua])
     }
 
     // MARK: - NSMenuDelegate
